@@ -40,7 +40,11 @@ async function boot() {
 
 // ---------- collections list ----------
 async function renderCollections() {
-  const cols = await api('/collections')
+  const [cols, stats] = await Promise.all([api('/collections'), api('/stats')])
+  const daily = stats.daily || []
+  const maxViews = Math.max(1, ...daily.map((d) => d.views))
+  const firstDate = daily[0]?.view_date?.slice(5).replace('-', '.') || ''
+  const lastDate = daily.at(-1)?.view_date?.slice(5).replace('-', '.') || ''
   app.innerHTML = `
     <div class="topbar">
       <h2>컬렉션 관리</h2>
@@ -51,6 +55,18 @@ async function renderCollections() {
         <button onclick="location.href='/'">갤러리 보기</button>
         <button id="logoutBtn">로그아웃</button>
       </div>
+    </div>
+    <div class="panel">
+      <h3>사이트 조회수 <span class="muted">KST 기준 · 최근 ${daily.length}일</span></h3>
+      <div class="stats-grid">
+        <div class="stat-card"><div class="label">총조회수</div><div class="value">${Number(stats.total_views).toLocaleString()}</div></div>
+        <div class="stat-card"><div class="label">오늘 조회수</div><div class="value">${Number(stats.today_views).toLocaleString()}</div></div>
+      </div>
+      ${daily.length ? `
+        <div class="view-chart" aria-label="최근 일별 조회수">
+          ${daily.map((d) => `<div class="view-bar" style="height:${Math.max(3, Math.round(d.views / maxViews * 100))}%" title="${esc(d.view_date)} · ${Number(d.views).toLocaleString()}회"></div>`).join('')}
+        </div>
+        <div class="view-dates"><span>${esc(firstDate)}</span><span>${esc(lastDate)}</span></div>` : '<p class="muted">아직 집계된 조회수가 없습니다.</p>'}
     </div>
     <div class="panel">
       <h3>새 컬렉션</h3>

@@ -46,6 +46,10 @@ async function initDb(db) {
       handle TEXT PRIMARY KEY,
       name TEXT NOT NULL
     )`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS site_daily_views (
+      view_date TEXT PRIMARY KEY,
+      views INTEGER NOT NULL DEFAULT 0
+    )`),
   ])
   // 기존 DB 마이그레이션: photos.group_id 없으면 추가
   await db.prepare('ALTER TABLE photos ADD COLUMN group_id INTEGER').run().catch(() => {})
@@ -97,6 +101,37 @@ app.post('/api/logout', (c) => {
   return c.json({ ok: true })
 })
 app.get('/api/me', async (c) => c.json({ admin: await isAdmin(c) }))
+
+// ---------- site views (KST 기준 일별 누적) ----------
+// 방문자의 실제 문서 요청만 집계합니다. API·이미지 요청과 관리자 API는 포함하지 않습니다.
+async function recordSiteView(db) {
+  await db.prepare(
+    `INSERT INTO site_daily_views (view_date, views)
+     VALUES (date('now', '+9 hours'), 1)
+     ON CONFLICT(view_date) DO UPDATE SET views = views + 1`
+  ).run()
+}
+
+app.get('/api/stats', requireAdmin, async (c) => {
+  const requestedDays = Number(c.req.query('days') || 30)
+  const days = Math.min(90, Math.max(7, Number.isFinite(requestedDays) ? Math.floor(requestedDays) : 30))
+  const [totalResult, dailyResult] = await c.env.DB.batch([
+    c.env.DB.prepare('SELECT COALESCE(SUM(views), 0) AS total_views FROM site_daily_views'),
+    c.env.DB.prepare('SELECT view_date, views FROM site_daily_views ORDER BY view_date DESC LIMIT ?').bind(days),
+  ])
+  const viewsByDate = new Map((dailyResult.results || []).map((row) => [row.view_date, row.views]))
+  const kstNow = Date.now() + 9 * 60 * 60 * 1000
+  const daily = Array.from({ length: days }, (_, i) => {
+    const view_date = new Date(kstNow - (days - 1 - i) * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    return { view_date, views: viewsByDate.get(view_date) || 0 }
+  })
+  const today = daily.at(-1)
+  return c.json({
+    total_views: totalResult.results?.[0]?.total_views || 0,
+    today_views: today?.views || 0,
+    daily,
+  })
+})
 
 // ---------- collections ----------
 app.get('/api/collections', async (c) => {
@@ -622,6 +657,11 @@ const OG_TITLE = 'Moments Kept in Light'
 const OG_DESC = 'The moments we met, frame by frame.'
 
 app.get('/', async (c) => {
+  // 로그인한 관리자의 갤러리 확인은 조회수에서 제외합니다.
+  // 통계 저장 실패가 갤러리 자체를 막지는 않도록 분리합니다.
+  if (!(await isAdmin(c))) {
+    await recordSiteView(c.env.DB).catch((error) => console.error('site view recording failed', error))
+  }
   const res = await c.env.ASSETS.fetch(c.req.raw)
   let html = await res.text()
 
