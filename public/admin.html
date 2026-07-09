@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>관리 · KANEZ</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="style.css" />
+  <style>
+    .admin-wrap { max-width: 960px; margin: 0 auto; padding: 0 24px 80px; }
+    .panel { background: var(--bg-soft); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin-bottom: 24px; }
+    .panel h3 { font-size: 14px; font-weight: 600; margin-bottom: 16px; letter-spacing: 0.05em; }
+    .row { display: flex; gap: 10px; margin-bottom: 10px; }
+    .row input { flex: 1; }
+    .login-box { max-width: 360px; margin: 80px auto; }
+    .col-item { display: flex; align-items: center; gap: 14px; padding: 12px 4px; border-bottom: 1px solid var(--border); cursor: pointer; }
+    .col-item:hover { background: rgba(255,255,255,0.02); }
+    .col-item img { width: 72px; height: 48px; object-fit: cover; border-radius: 3px; background: var(--bg); }
+    .col-item .ph-placeholder { width: 72px; height: 48px; border-radius: 3px; background: var(--bg); }
+    .col-item .t { flex: 1; }
+    .col-item .t .title { font-size: 14px; }
+    .col-item .t .info { font-size: 12px; color: var(--fg-faint); }
+    .col-item .ord-btns { display: flex; gap: 4px; }
+    .col-item .ord-btns button { font-size: 11px; padding: 3px 8px; }
+    .dropzone { border: 2px dashed var(--border); border-radius: 8px; padding: 48px 24px; text-align: center; color: var(--fg-faint); font-size: 13px; letter-spacing: 0.05em; cursor: pointer; transition: border-color .2s, color .2s; }
+    .dropzone.drag { border-color: var(--fg-dim); color: var(--fg-dim); }
+    .upload-status { font-size: 12px; color: var(--fg-dim); margin-top: 12px; }
+    .admin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; margin-top: 20px; }
+    .admin-ph { position: relative; cursor: grab; }
+    .admin-ph.dragging { opacity: 0.35; }
+    .admin-ph img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 4px; }
+    .admin-ph .badge { position: absolute; top: 6px; left: 6px; background: var(--fg); color: var(--bg); font-size: 10px; padding: 2px 7px; border-radius: 3px; font-weight: 600; }
+    .admin-ph .acts { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 6px; opacity: 0; background: rgba(0,0,0,0.55); border-radius: 4px; transition: opacity .15s; }
+    .admin-ph:hover .acts { opacity: 1; }
+    .admin-ph .acts button { font-size: 11px; padding: 4px 9px; background: var(--bg-soft); }
+    /* 일괄 선택 체크박스 */
+    .admin-ph .selbox { position: absolute; top: 6px; right: 6px; width: 20px; height: 20px; border: 1.5px solid rgba(255,255,255,0.7); border-radius: 50%; background: rgba(0,0,0,0.4); cursor: pointer; z-index: 2; transition: background .15s; }
+    .admin-ph.selected .selbox { background: var(--fg); border-color: var(--fg); }
+    .admin-ph.selected .selbox::after { content: '✓'; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--bg); font-size: 12px; font-weight: 700; }
+    .admin-ph.selected img { outline: 2px solid var(--fg); outline-offset: -2px; }
+    .bulkbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: var(--bg-soft); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; position: sticky; top: 8px; z-index: 5; }
+    .bulkbar[hidden] { display: none; }
+    .bulkbar .bulk-count { font-size: 13px; }
+    .bulkbar .r { display: flex; gap: 8px; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; padding: 28px 0 24px; }
+    .topbar h2 { font-size: 16px; font-weight: 600; letter-spacing: 0.05em; }
+    .topbar .r { display: flex; gap: 8px; }
+    /* ---------- 그리드 이미지 만들기 ---------- */
+    .grid-maker { position: fixed; inset: 0; background: rgba(8,8,10,0.97); z-index: 200; overflow-y: auto; }
+    .grid-maker .inner { max-width: 1100px; margin: 0 auto; padding: 32px 24px 80px; }
+    .grid-maker .gm-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+    .grid-maker h3 { font-size: 15px; font-weight: 600; letter-spacing: 0.05em; }
+    .gm-controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 16px; font-size: 13px; color: var(--fg-dim); }
+    .gm-controls select { font: inherit; color: var(--fg); background: var(--bg-soft); border: 1px solid var(--border); border-radius: 4px; padding: 6px 10px; }
+    .gm-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 8px; margin-bottom: 20px; max-height: 320px; overflow-y: auto; padding: 4px; background: var(--bg-soft); border: 1px solid var(--border); border-radius: 8px; }
+    .gm-picker .gm-sec { grid-column: 1 / -1; font-size: 12px; color: var(--fg-dim); letter-spacing: 0.08em; padding: 10px 2px 2px; }
+    .gm-picker .pick { position: relative; cursor: pointer; }
+    .gm-picker .pick img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 3px; opacity: 0.55; transition: opacity .15s; }
+    .gm-picker .pick:hover img { opacity: 0.8; }
+    .gm-picker .pick.on img { opacity: 1; outline: 2px solid var(--fg); outline-offset: -2px; }
+    .gm-picker .pick .ord { position: absolute; top: 4px; left: 4px; background: var(--fg); color: var(--bg); font-size: 11px; font-weight: 700; width: 20px; height: 20px; border-radius: 50%; display: none; align-items: center; justify-content: center; }
+    .gm-picker .pick.on .ord { display: flex; }
+    .gm-preview { text-align: center; }
+    .gm-preview canvas { max-width: 100%; height: auto; border-radius: 4px; background: var(--bg-soft); }
+    .gm-hint { font-size: 12px; color: var(--fg-faint); margin-top: 10px; }
+    .sec-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+    .sec-head .r { display: flex; gap: 6px; }
+    .sec-head button { font-size: 11px; padding: 3px 9px; }
+    .dropzone { padding: 28px 20px; }
+    .muted { color: var(--fg-faint); font-size: 12px; }
+    .danger { color: #e07070; border-color: #4a2a2a; }
+    .danger:hover { border-color: #e07070; }
+  </style>
+</head>
+<body>
+  <div class="admin-wrap" id="app"></div>
+  <script src="vendor/exifr.js"></script>
+  <script src="admin.js"></script>
+</body>
+</html>

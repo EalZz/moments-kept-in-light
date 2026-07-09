@@ -1,0 +1,25 @@
+{
+  "name": "pht-pp",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-06-01",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/", "/api/*", "/img/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "pht_pp",
+      "database_id": "69084f63-8997-47e4-8882-630b453bfd6f"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "PHOTOS",
+      "bucket_name": "pht-pp-photos"
+    }
+  ]
+  // ADMIN_PASSWORD: 로컬은 .dev.vars, 프로덕션은 `wrangler secret put ADMIN_PASSWORD`
+
+}

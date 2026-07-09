@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KANEZ</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Noto+Serif+KR:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="hero-bg" aria-hidden="true"></div>
+  <div class="frame" aria-hidden="true">
+    <span class="corner tl"></span><span class="corner tr"></span>
+    <span class="corner bl"></span><span class="corner br"></span>
+    <span class="rail rail-l"></span><span class="rail rail-r"></span>
+  </div>
+
+  <header class="nav">
+    <div class="nav-inner">
+      <a class="wordmark" href="#/" data-site-name>KANEZ</a>
+      <button class="nav-toggle" aria-label="메뉴" aria-expanded="false"><span></span><span></span></button>
+      <nav class="nav-links">
+        <a href="#/" data-scroll="#collections">Collections</a>
+        <a href="#/photos">Photos</a>
+        <a href="#/models">Models</a>
+        <a href="#/about">About</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap" id="main"></main>
+
+  <footer class="site">
+    <a href="admin.html">Photos © <span data-site-name>KANEZ</span> — please ask before using</a>
+  </footer>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
