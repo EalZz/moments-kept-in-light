@@ -1,20 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <defs>
-    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#f6efe0" stop-opacity="0.95"/>
-      <stop offset="38%" stop-color="#d8c4a0" stop-opacity="0.32"/>
-      <stop offset="100%" stop-color="#d8c4a0" stop-opacity="0"/>
-    </radialGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0.7" y2="1">
+      <stop offset="0%" stop-color="#f6efe0"/>
+      <stop offset="55%" stop-color="#d8c4a0" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#d8c4a0" stop-opacity="0.06"/>
+    </linearGradient>
   </defs>
-  <rect width="64" height="64" rx="13" fill="#0b0b0d"/>
-  <!-- 빛으로 담긴 한 순간: 가운데 빛나는 점 -->
-  <circle cx="32" cy="32" r="18" fill="url(#glow)"/>
-  <circle cx="32" cy="32" r="4.3" fill="#f6efe0"/>
-  <!-- 프레임: 사이트의 코너 마커 모티프 -->
-  <g fill="none" stroke="#b8a98c" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M15 25 V15 H25"/>
-    <path d="M39 15 H49 V25"/>
-    <path d="M49 39 V49 H39"/>
-    <path d="M25 49 H15 V39"/>
-  </g>
+  <rect width="64" height="64" rx="14" fill="#0b0b0d"/>
+  <!-- 어둠 속 빛나는 테두리(림라이트) — 역광의 빛 -->
+  <circle cx="32" cy="33" r="15" fill="none" stroke="url(#rim)" stroke-width="3.4"/>
+  <circle cx="24.5" cy="22.5" r="3.2" fill="#f6efe0"/>
 </svg>
