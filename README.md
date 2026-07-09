@@ -16,7 +16,7 @@
 ![R2](https://img.shields.io/badge/R2-Storage-F38020?logo=cloudflare&logoColor=white)
 ![JavaScript](https://img.shields.io/badge/Vanilla-JS-F7DF1E?logo=javascript&logoColor=black)
 
-### 🔗 [**라이브 사이트 바로가기 →**](https://pht-pp.phtkanez.workers.dev)
+### 🔗 [**라이브 사이트 바로가기 →**](https://moments-in-light.phtkanez.workers.dev)
 
 </div>
 
