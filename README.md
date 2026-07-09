@@ -82,6 +82,9 @@ npx wrangler deploy
 npx wrangler secret put ADMIN_PASSWORD
 ```
 
+> 🧭 **처음부터 직접 띄워보고 싶다면** → [**SETUP.md**](SETUP.md)
+> 계정 만들기·도구 설치·배포·커스터마이징까지, 코딩을 몰라도 따라 할 수 있는 단계별 가이드입니다.
+
 ---
 
 <div align="center">
