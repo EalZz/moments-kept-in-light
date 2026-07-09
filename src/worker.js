@@ -103,7 +103,10 @@ app.post('/api/logout', (c) => {
 app.get('/api/me', async (c) => c.json({ admin: await isAdmin(c) }))
 
 // ---------- site views (KST 기준 일별 누적) ----------
-// 방문자의 실제 문서 요청만 집계합니다. API·이미지 요청과 관리자 API는 포함하지 않습니다.
+// 브라우저의 실제 문서 이동만 집계합니다. 링크 미리보기 봇·API·이미지 요청은 제외합니다.
+function isDirectPageVisit(c) {
+  return c.req.header('sec-fetch-dest') === 'document' && c.req.header('sec-fetch-mode') === 'navigate'
+}
 async function recordSiteView(db) {
   await db.prepare(
     `INSERT INTO site_daily_views (view_date, views)
@@ -659,7 +662,7 @@ const OG_DESC = 'The moments we met, frame by frame.'
 app.get('/', async (c) => {
   // 로그인한 관리자의 갤러리 확인은 조회수에서 제외합니다.
   // 통계 저장 실패가 갤러리 자체를 막지는 않도록 분리합니다.
-  if (!(await isAdmin(c))) {
+  if (isDirectPageVisit(c) && !(await isAdmin(c))) {
     await recordSiteView(c.env.DB).catch((error) => console.error('site view recording failed', error))
   }
   const res = await c.env.ASSETS.fetch(c.req.raw)

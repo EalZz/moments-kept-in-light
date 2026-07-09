@@ -654,19 +654,12 @@ function openLightbox(i) {
 
     const outgoing = activeImage
     const incoming = [...box.querySelectorAll('.lb-image')].find((image) => image !== outgoing)
-    incoming.className = `lb-image from-${direction > 0 ? 'right' : 'left'}`
-    incoming.src = '/img/' + p.key_large
-    if (incoming.decode) await incoming.decode().catch(() => {})
-    // 시작 위치를 확정한 뒤 전환 클래스를 붙여 CSS transition을 보장합니다.
-    void incoming.offsetWidth
-    incoming.classList.add('active')
-    outgoing.classList.remove('active')
-    outgoing.classList.add(direction > 0 ? 'exit-left' : 'exit-right')
-    updateInfo()
-    preloadNearby()
-
+    let finished = false
     const finish = (event) => {
-      if (event.propertyName !== 'transform') return
+      if (event?.propertyName && event.propertyName !== 'transform') return
+      if (finished) return
+      finished = true
+      clearTimeout(fallback)
       incoming.removeEventListener('transitionend', finish)
       outgoing.className = 'lb-image'
       outgoing.removeAttribute('src')
@@ -674,7 +667,20 @@ function openLightbox(i) {
       activeImage = incoming
       transitioning = false
     }
+
+    incoming.className = `lb-image from-${direction > 0 ? 'right' : 'left'}`
+    incoming.src = '/img/' + p.key_large
+    if (incoming.decode) await incoming.decode().catch(() => {})
     incoming.addEventListener('transitionend', finish)
+    // 시작 위치를 확정한 뒤 전환 클래스를 붙여 CSS transition을 보장합니다.
+    void incoming.offsetWidth
+    incoming.classList.add('active')
+    outgoing.classList.remove('active')
+    outgoing.classList.add(direction > 0 ? 'exit-left' : 'exit-right')
+    updateInfo()
+    preloadNearby()
+    // transitionend가 오지 않는 예외 환경에서도 탐색이 잠기지 않게 합니다.
+    const fallback = setTimeout(finish, 500)
   }
 
   const move = (d) => {
