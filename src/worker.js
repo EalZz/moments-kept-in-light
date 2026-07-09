@@ -618,7 +618,7 @@ app.get('/api/fetch-image', requireAdmin, async (c) => {
 
 // ---------- OG 태그 (트위터/카톡 공유 미리보기 카드) ----------
 // 문구는 public/config.js와 맞춰서 관리
-const OG_TITLE = 'KANEZ — Photography Portfolio'
+const OG_TITLE = 'Moments Kept in Light'
 const OG_DESC = 'The moments we met, frame by frame.'
 
 app.get('/', async (c) => {
