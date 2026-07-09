@@ -600,7 +600,10 @@ function openLightbox(i) {
   box.className = 'lightbox'
   box.innerHTML = `
     <span class="count"></span>
-    <img />
+    <div class="image-stage">
+      <img class="lb-image active" />
+      <img class="lb-image" />
+    </div>
     <div class="exif"></div>
     <button class="nav-arrow prev" aria-label="이전">‹</button>
     <button class="nav-arrow next" aria-label="다음">›</button>
@@ -608,9 +611,11 @@ function openLightbox(i) {
   document.body.appendChild(box)
   document.body.style.overflow = 'hidden'
 
-  const show = () => {
+  let activeImage = box.querySelector('.lb-image.active')
+  let transitioning = false
+
+  const updateInfo = () => {
     const p = current.photos[current.index]
-    box.querySelector('img').src = '/img/' + p.key_large
     const exifEl = box.querySelector('.exif')
     exifEl.textContent = [p._event, exifLine(p)].filter(Boolean).join(' · ')
     for (const handle of p._models || []) {
@@ -629,9 +634,54 @@ function openLightbox(i) {
     }
     box.querySelector('.count').textContent = `${current.index + 1} / ${current.photos.length}`
   }
+
+  const preloadNearby = () => {
+    for (const d of [-1, 1]) {
+      const p = current.photos[(current.index + d + current.photos.length) % current.photos.length]
+      const image = new Image()
+      image.src = '/img/' + p.key_large
+    }
+  }
+
+  const show = async (direction = 0) => {
+    const p = current.photos[current.index]
+    if (!direction) {
+      activeImage.src = '/img/' + p.key_large
+      updateInfo()
+      preloadNearby()
+      return
+    }
+
+    const outgoing = activeImage
+    const incoming = [...box.querySelectorAll('.lb-image')].find((image) => image !== outgoing)
+    incoming.className = `lb-image from-${direction > 0 ? 'right' : 'left'}`
+    incoming.src = '/img/' + p.key_large
+    if (incoming.decode) await incoming.decode().catch(() => {})
+    // 시작 위치를 확정한 뒤 전환 클래스를 붙여 CSS transition을 보장합니다.
+    void incoming.offsetWidth
+    incoming.classList.add('active')
+    outgoing.classList.remove('active')
+    outgoing.classList.add(direction > 0 ? 'exit-left' : 'exit-right')
+    updateInfo()
+    preloadNearby()
+
+    const finish = (event) => {
+      if (event.propertyName !== 'transform') return
+      incoming.removeEventListener('transitionend', finish)
+      outgoing.className = 'lb-image'
+      outgoing.removeAttribute('src')
+      incoming.className = 'lb-image active'
+      activeImage = incoming
+      transitioning = false
+    }
+    incoming.addEventListener('transitionend', finish)
+  }
+
   const move = (d) => {
+    if (transitioning) return
+    transitioning = true
     current.index = (current.index + d + current.photos.length) % current.photos.length
-    show()
+    show(d)
   }
   const close = () => {
     document.removeEventListener('keydown', onKey)
