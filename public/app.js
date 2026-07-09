@@ -314,7 +314,7 @@ function cardHtml(c) {
   return `
     <a class="card" href="#/c/${c.id}">
       <div class="cover" ${c.cover_w && c.cover_h ? `style="aspect-ratio:${c.cover_w}/${c.cover_h}"` : ''}>
-        <img src="/img/${esc(c.cover_thumb)}" alt="${esc(c.title)}" loading="lazy" data-fade />
+        <img src="/img/${esc(c.cover_large || c.cover_thumb)}" alt="${esc(c.title)}" loading="lazy" data-fade />
       </div>
       ${(c.preview_thumbs || []).length ? `<div class="strip">
         ${c.preview_thumbs.map((k, i) => {
