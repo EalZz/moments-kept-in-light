@@ -513,6 +513,21 @@ main.wrap { padding-top: 76px; }
   margin-left: auto;
   margin-right: auto;
 }
+/* 컬렉션 공유 — 페이지 맨 아래, 은은한 링크 */
+.col-share { text-align: center; padding: 56px 0 8px; }
+.col-share .share-collection {
+  border: none;
+  background: none;
+  padding: 6px 4px;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+  cursor: pointer;
+  transition: color 0.25s ease;
+}
+.col-share .share-collection:hover { color: var(--fg-dim); }
+
 .view-toggle {
   margin-top: 24px;
   display: inline-flex;

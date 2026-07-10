@@ -541,9 +541,6 @@ async function renderCollection(id, focusGroup = null) {
       <h2>${esc(col.title)}</h2>
       ${col.date ? `<div class="date">${esc(col.date)}</div>` : ''}
       ${col.description ? `<div class="desc">${esc(col.description)}</div>` : ''}
-      <div style="margin-top:18px">
-        <button type="button" class="share-collection" aria-label="컬렉션 공유 링크 복사">Share</button>
-      </div>
       ${sections.length ? `<div class="view-toggle">
         <button data-view="people" class="${viewMode === 'people' ? 'on' : ''}">Model</button>
         <button data-view="all" class="${viewMode === 'all' ? 'on' : ''}">All</button>
@@ -552,7 +549,10 @@ async function renderCollection(id, focusGroup = null) {
     ${!col.photos.length ? '<div class="empty">사진이 없습니다</div>' : ''}
     ${viewMode === 'all'
       ? '<div class="jgrid"></div>'
-      : `${ungrouped.length ? '<div class="jgrid"></div>' : ''}${sectionBlocks.join('')}`}`
+      : `${ungrouped.length ? '<div class="jgrid"></div>' : ''}${sectionBlocks.join('')}`}
+    ${col.photos.length ? `<div class="col-share">
+      <button type="button" class="share-collection" aria-label="컬렉션 공유 링크 복사">이 컬렉션 공유 ↗</button>
+    </div>` : ''}`
 
   layoutJustifiedAll()
 
@@ -562,14 +562,14 @@ async function renderCollection(id, focusGroup = null) {
       renderCollection(id)
     }))
 
-  main.querySelector('.share-collection').addEventListener('click', async (ev) => {
+  main.querySelector('.share-collection')?.addEventListener('click', async (ev) => {
     const shareUrl = `${location.origin}/share/collection/${encodeURIComponent(id)}`
     try {
       if (!navigator.clipboard) throw new Error('Clipboard API unavailable')
       await navigator.clipboard.writeText(shareUrl)
       const button = ev.currentTarget
-      button.textContent = 'Copied'
-      setTimeout(() => { button.textContent = 'Share' }, 1600)
+      button.textContent = '링크 복사됨'
+      setTimeout(() => { button.textContent = '이 컬렉션 공유 ↗' }, 1600)
     } catch {
       window.prompt('공유 링크를 복사하세요:', shareUrl)
     }
