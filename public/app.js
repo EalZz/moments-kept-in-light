@@ -541,6 +541,9 @@ async function renderCollection(id, focusGroup = null) {
       <h2>${esc(col.title)}</h2>
       ${col.date ? `<div class="date">${esc(col.date)}</div>` : ''}
       ${col.description ? `<div class="desc">${esc(col.description)}</div>` : ''}
+      <div style="margin-top:18px">
+        <button type="button" class="share-collection" aria-label="컬렉션 공유 링크 복사">Share</button>
+      </div>
       ${sections.length ? `<div class="view-toggle">
         <button data-view="people" class="${viewMode === 'people' ? 'on' : ''}">Model</button>
         <button data-view="all" class="${viewMode === 'all' ? 'on' : ''}">All</button>
@@ -558,6 +561,19 @@ async function renderCollection(id, focusGroup = null) {
       localStorage.setItem('pht-view', b.dataset.view)
       renderCollection(id)
     }))
+
+  main.querySelector('.share-collection').addEventListener('click', async (ev) => {
+    const shareUrl = `${location.origin}/share/collection/${encodeURIComponent(id)}`
+    try {
+      if (!navigator.clipboard) throw new Error('Clipboard API unavailable')
+      await navigator.clipboard.writeText(shareUrl)
+      const button = ev.currentTarget
+      button.textContent = 'Copied'
+      setTimeout(() => { button.textContent = 'Share' }, 1600)
+    } catch {
+      window.prompt('공유 링크를 복사하세요:', shareUrl)
+    }
+  })
 
   // 폴더 포커스: 해당 사람 섹션으로 스크롤 + 잠깐 하이라이트
   if (focusGroup) {

@@ -1,7 +1,17 @@
 {
+  "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "moments-in-light",
   "main": "src/worker.js",
-  "compatibility_date": "2026-06-01",
+  "compatibility_date": "2026-07-10",
+  "compatibility_flags": ["nodejs_compat"],
+  "secrets": {
+    "required": ["ADMIN_PASSWORD"]
+  },
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "head_sampling_rate": 1 },
+    "traces": { "enabled": true, "head_sampling_rate": 0.01 }
+  },
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
@@ -11,7 +21,8 @@
     {
       "binding": "DB",
       "database_name": "pht_pp",
-      "database_id": "69084f63-8997-47e4-8882-630b453bfd6f"
+      "database_id": "69084f63-8997-47e4-8882-630b453bfd6f",
+      "migrations_dir": "./migrations"
     }
   ],
   "r2_buckets": [

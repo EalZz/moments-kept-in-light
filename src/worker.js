@@ -3,10 +3,18 @@ import { getCookie, setCookie, deleteCookie } from 'hono/cookie'
 
 const app = new Hono()
 
-// ---------- DB init (prototype: create tables on first request) ----------
+// ---------- DB schema ----------
+// 신규 설치는 migrations/0001_initial.sql을 사용합니다. 아래 부트스트랩은 기존 배포 DB를
+// 무중단으로 새 스키마에 올리기 위한 호환 계층이며, 누락 컬럼만 확인해서 추가합니다.
 let initialized = false
-async function initDb(db) {
-  if (initialized) return
+let initializationPromise = null
+async function ensureColumn(db, table, column, definition) {
+  const { results } = await db.prepare(`PRAGMA table_info(${table})`).all()
+  if (!results.some((row) => row.name === column)) {
+    await db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run()
+  }
+}
+async function initializeDb(db) {
   await db.batch([
     db.prepare(`CREATE TABLE IF NOT EXISTS collections (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -14,6 +22,11 @@ async function initDb(db) {
       description TEXT DEFAULT '',
       date TEXT DEFAULT '',
       cover_photo_id INTEGER,
+      meta_json TEXT DEFAULT '{}',
+      sort_order INTEGER,
+      published INTEGER NOT NULL DEFAULT 1,
+      deleted_at TEXT,
+      purge_started_at TEXT,
       created_at TEXT DEFAULT (datetime('now'))
     )`),
     db.prepare(`CREATE TABLE IF NOT EXISTS photos (
@@ -26,12 +39,17 @@ async function initDb(db) {
       height INTEGER DEFAULT 0,
       taken_at TEXT DEFAULT '',
       exif_json TEXT DEFAULT '{}',
+      sort_order INTEGER,
+      deleted_at TEXT,
+      purge_started_at TEXT,
       created_at TEXT DEFAULT (datetime('now'))
     )`),
     db.prepare(`CREATE TABLE IF NOT EXISTS groups (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       collection_id INTEGER NOT NULL,
       name TEXT NOT NULL,
+      meta_json TEXT DEFAULT '{}',
+      sort_order INTEGER,
       created_at TEXT DEFAULT (datetime('now'))
     )`),
     db.prepare(`CREATE TABLE IF NOT EXISTS settings (
@@ -50,18 +68,40 @@ async function initDb(db) {
       view_date TEXT PRIMARY KEY,
       views INTEGER NOT NULL DEFAULT 0
     )`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS login_attempts (
+      client_key TEXT PRIMARY KEY,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      window_started_at INTEGER NOT NULL
+    )`),
   ])
-  // 기존 DB 마이그레이션: photos.group_id 없으면 추가
-  await db.prepare('ALTER TABLE photos ADD COLUMN group_id INTEGER').run().catch(() => {})
-  // 확장용 메타(장소, 크레딧 등 나중에 자유롭게 추가) — JSON으로 저장해 스키마 변경 없이 확장
-  await db.prepare(`ALTER TABLE collections ADD COLUMN meta_json TEXT DEFAULT '{}'`).run().catch(() => {})
-  await db.prepare(`ALTER TABLE groups ADD COLUMN meta_json TEXT DEFAULT '{}'`).run().catch(() => {})
-  // 수동 정렬 (NULL = 아직 정렬 안 함 → 촬영시간순 뒤에 배치)
-  await db.prepare('ALTER TABLE photos ADD COLUMN sort_order INTEGER').run().catch(() => {})
-  await db.prepare('ALTER TABLE groups ADD COLUMN sort_order INTEGER').run().catch(() => {})
-  // 컬렉션 수동 정렬 (NULL = 새 컬렉션 → 맨 위)
-  await db.prepare('ALTER TABLE collections ADD COLUMN sort_order INTEGER').run().catch(() => {})
+  await ensureColumn(db, 'photos', 'group_id', 'INTEGER')
+  await ensureColumn(db, 'collections', 'meta_json', "TEXT DEFAULT '{}'")
+  await ensureColumn(db, 'groups', 'meta_json', "TEXT DEFAULT '{}'")
+  await ensureColumn(db, 'photos', 'sort_order', 'INTEGER')
+  await ensureColumn(db, 'groups', 'sort_order', 'INTEGER')
+  await ensureColumn(db, 'collections', 'sort_order', 'INTEGER')
+  await ensureColumn(db, 'collections', 'published', 'INTEGER NOT NULL DEFAULT 1')
+  await ensureColumn(db, 'collections', 'deleted_at', 'TEXT')
+  await ensureColumn(db, 'photos', 'deleted_at', 'TEXT')
+  await ensureColumn(db, 'collections', 'purge_started_at', 'TEXT')
+  await ensureColumn(db, 'photos', 'purge_started_at', 'TEXT')
+  await db.batch([
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_collections_visibility ON collections(deleted_at, published, sort_order, date)'),
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_photos_collection_order ON photos(collection_id, deleted_at, sort_order, taken_at, id)'),
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_photos_group ON photos(group_id, deleted_at, sort_order, id)'),
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_groups_collection_order ON groups(collection_id, sort_order, id)'),
+  ])
   initialized = true
+}
+async function initDb(db) {
+  if (initialized) return
+  if (!initializationPromise) {
+    initializationPromise = initializeDb(db).catch((error) => {
+      initializationPromise = null
+      throw error
+    })
+  }
+  await initializationPromise
 }
 app.use('*', async (c, next) => {
   await initDb(c.env.DB)
@@ -69,35 +109,121 @@ app.use('*', async (c, next) => {
 })
 
 // ---------- auth ----------
-async function sessionToken(env) {
-  const data = new TextEncoder().encode('pht-pp-session-v1|' + env.ADMIN_PASSWORD)
-  const hash = await crypto.subtle.digest('SHA-256', data)
-  return [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, '0')).join('')
+const textEncoder = new TextEncoder()
+const LOGIN_WINDOW_MS = 15 * 60 * 1000
+const MAX_LOGIN_FAILURES = 5
+
+function parseJsonObject(value) {
+  try {
+    const parsed = JSON.parse(value || '{}')
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+async function digest(value) {
+  return crypto.subtle.digest('SHA-256', textEncoder.encode(String(value)))
+}
+async function safeEqual(a, b) {
+  const [aHash, bHash] = await Promise.all([digest(a), digest(b)])
+  return crypto.subtle.timingSafeEqual(aHash, bHash)
+}
+function toBase64Url(value) {
+  return btoa(value).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+async function signSession(payload, password) {
+  const key = await crypto.subtle.importKey(
+    'raw', textEncoder.encode(password), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+  )
+  const signature = await crypto.subtle.sign('HMAC', key, textEncoder.encode(payload))
+  return [...new Uint8Array(signature)].map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+async function createSessionToken(env) {
+  const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000
+  const payload = `${expiresAt}.${crypto.randomUUID()}`
+  return `${toBase64Url(payload)}.${await signSession(payload, env.ADMIN_PASSWORD)}`
+}
+async function verifySessionToken(token, env) {
+  if (!token || !env.ADMIN_PASSWORD) return false
+  const split = token.lastIndexOf('.')
+  if (split <= 0) return false
+  let payload
+  try {
+    const encoded = token.slice(0, split).replace(/-/g, '+').replace(/_/g, '/')
+    payload = atob(encoded.padEnd(Math.ceil(encoded.length / 4) * 4, '='))
+  } catch {
+    return false
+  }
+  const expiresAt = Number(payload.split('.')[0])
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return false
+  return safeEqual(token.slice(split + 1), await signSession(payload, env.ADMIN_PASSWORD))
 }
 async function isAdmin(c) {
   const tok = getCookie(c, 'session')
-  return !!tok && tok === (await sessionToken(c.env))
+  return verifySessionToken(tok, c.env)
 }
 const requireAdmin = async (c, next) => {
   if (!(await isAdmin(c))) return c.json({ error: 'unauthorized' }, 401)
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(c.req.method)) {
+    const origin = c.req.header('origin')
+    if (origin && origin !== new URL(c.req.url).origin) return c.json({ error: 'forbidden origin' }, 403)
+  }
   await next()
 }
 
+async function loginClientKey(c) {
+  const raw = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for')?.split(',')[0]?.trim() || 'local'
+  const hash = await digest(raw)
+  return [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+async function loginAllowed(db, clientKey) {
+  const row = await db.prepare('SELECT attempts, window_started_at FROM login_attempts WHERE client_key = ?')
+    .bind(clientKey).first()
+  if (!row) return true
+  if (Date.now() - row.window_started_at >= LOGIN_WINDOW_MS) {
+    await db.prepare('DELETE FROM login_attempts WHERE client_key = ?').bind(clientKey).run()
+    return true
+  }
+  return row.attempts < MAX_LOGIN_FAILURES
+}
+async function recordLoginFailure(db, clientKey) {
+  const now = Date.now()
+  await db.prepare(
+    `INSERT INTO login_attempts (client_key, attempts, window_started_at) VALUES (?, 1, ?)
+     ON CONFLICT(client_key) DO UPDATE SET
+       attempts = CASE WHEN ? - window_started_at >= ? THEN 1 ELSE attempts + 1 END,
+       window_started_at = CASE WHEN ? - window_started_at >= ? THEN ? ELSE window_started_at END`
+  ).bind(clientKey, now, now, LOGIN_WINDOW_MS, now, LOGIN_WINDOW_MS, now).run()
+}
+
 app.post('/api/login', async (c) => {
+  if (!c.env.ADMIN_PASSWORD) return c.json({ error: 'admin password is not configured' }, 503)
+  const clientKey = await loginClientKey(c)
+  if (!(await loginAllowed(c.env.DB, clientKey))) {
+    return c.json({ error: 'too many attempts; try again later' }, 429)
+  }
   const { password } = await c.req.json()
-  if (!password || password !== c.env.ADMIN_PASSWORD) {
+  if (!password || !(await safeEqual(password, c.env.ADMIN_PASSWORD))) {
+    await recordLoginFailure(c.env.DB, clientKey)
     return c.json({ error: 'wrong password' }, 401)
   }
-  setCookie(c, 'session', await sessionToken(c.env), {
+  await c.env.DB.prepare('DELETE FROM login_attempts WHERE client_key = ?').bind(clientKey).run()
+  setCookie(c, 'session', await createSessionToken(c.env), {
     httpOnly: true,
-    sameSite: 'Lax',
+    secure: new URL(c.req.url).protocol === 'https:',
+    sameSite: 'Strict',
     path: '/',
     maxAge: 60 * 60 * 24 * 30,
   })
   return c.json({ ok: true })
 })
 app.post('/api/logout', (c) => {
-  deleteCookie(c, 'session', { path: '/' })
+  deleteCookie(c, 'session', {
+    path: '/',
+    secure: new URL(c.req.url).protocol === 'https:',
+    sameSite: 'Strict',
+  })
   return c.json({ ok: true })
 })
 app.get('/api/me', async (c) => c.json({ admin: await isAdmin(c) }))
@@ -138,22 +264,25 @@ app.get('/api/stats', requireAdmin, async (c) => {
 
 // ---------- collections ----------
 app.get('/api/collections', async (c) => {
+  const includeDrafts = await isAdmin(c)
+  const visibility = includeDrafts ? 'col.deleted_at IS NULL' : 'col.deleted_at IS NULL AND col.published = 1'
   const { results } = await c.env.DB.prepare(
     `SELECT col.*, p.key_thumb AS cover_thumb, p.key_large AS cover_large,
             p.width AS cover_w, p.height AS cover_h, p.group_id AS cover_group,
-            (SELECT COUNT(*) FROM photos WHERE collection_id = col.id) AS photo_count,
-            (SELECT key_thumb FROM photos WHERE collection_id = col.id ORDER BY (sort_order IS NULL), sort_order, taken_at, id LIMIT 1) AS first_thumb,
-            (SELECT key_large FROM photos WHERE collection_id = col.id ORDER BY (sort_order IS NULL), sort_order, taken_at, id LIMIT 1) AS first_large,
-            (SELECT width FROM photos WHERE collection_id = col.id ORDER BY (sort_order IS NULL), sort_order, taken_at, id LIMIT 1) AS first_w,
-            (SELECT height FROM photos WHERE collection_id = col.id ORDER BY (sort_order IS NULL), sort_order, taken_at, id LIMIT 1) AS first_h
+            (SELECT COUNT(*) FROM photos WHERE collection_id = col.id AND deleted_at IS NULL) AS photo_count,
+            (SELECT key_thumb FROM photos WHERE collection_id = col.id AND deleted_at IS NULL ORDER BY (sort_order IS NULL), sort_order, taken_at, id LIMIT 1) AS first_thumb,
+            (SELECT key_large FROM photos WHERE collection_id = col.id AND deleted_at IS NULL ORDER BY (sort_order IS NULL), sort_order, taken_at, id LIMIT 1) AS first_large,
+            (SELECT width FROM photos WHERE collection_id = col.id AND deleted_at IS NULL ORDER BY (sort_order IS NULL), sort_order, taken_at, id LIMIT 1) AS first_w,
+            (SELECT height FROM photos WHERE collection_id = col.id AND deleted_at IS NULL ORDER BY (sort_order IS NULL), sort_order, taken_at, id LIMIT 1) AS first_h
      FROM collections col
-     LEFT JOIN photos p ON p.id = col.cover_photo_id
+     LEFT JOIN photos p ON p.id = col.cover_photo_id AND p.deleted_at IS NULL
+     WHERE ${visibility}
      ORDER BY (col.sort_order IS NOT NULL), col.sort_order, col.date DESC, col.id ASC`
   ).all()
   // 카드 미리보기용 썸네일 (대표 제외 최대 3장)
   // 같은 사람(폴더) 사진만 연속으로 나오지 않게, 대표와 다른 폴더에서 한 장씩 우선 선택
   const { results: thumbRows } = await c.env.DB.prepare(
-    'SELECT collection_id, group_id, key_thumb FROM photos ORDER BY (sort_order IS NULL), sort_order, taken_at, id'
+    'SELECT collection_id, group_id, key_thumb FROM photos WHERE deleted_at IS NULL ORDER BY (sort_order IS NULL), sort_order, taken_at, id'
   ).all()
   const thumbsByCol = {}
   for (const t of thumbRows) (thumbsByCol[t.collection_id] ||= []).push(t)
@@ -193,23 +322,26 @@ app.post('/api/collections', requireAdmin, async (c) => {
   const { title, date = '', description = '' } = await c.req.json()
   if (!title) return c.json({ error: 'title required' }, 400)
   const { meta } = await c.env.DB.prepare(
-    'INSERT INTO collections (title, date, description) VALUES (?, ?, ?)'
+    'INSERT INTO collections (title, date, description, published) VALUES (?, ?, ?, 0)'
   ).bind(title, date, description).run()
   return c.json({ id: meta.last_row_id })
 })
 
 app.get('/api/collections/:id', async (c) => {
   const id = c.req.param('id')
-  const col = await c.env.DB.prepare('SELECT * FROM collections WHERE id = ?').bind(id).first()
+  const includeDrafts = await isAdmin(c)
+  const col = await c.env.DB.prepare(
+    `SELECT * FROM collections WHERE id = ? AND deleted_at IS NULL${includeDrafts ? '' : ' AND published = 1'}`
+  ).bind(id).first()
   if (!col) return c.json({ error: 'not found' }, 404)
   const { results: photos } = await c.env.DB.prepare(
-    'SELECT * FROM photos WHERE collection_id = ? ORDER BY (sort_order IS NULL), sort_order, taken_at, id'
+    'SELECT * FROM photos WHERE collection_id = ? AND deleted_at IS NULL ORDER BY (sort_order IS NULL), sort_order, taken_at, id'
   ).bind(id).all()
-  for (const p of photos) p.exif = JSON.parse(p.exif_json || '{}')
+  for (const p of photos) p.exif = parseJsonObject(p.exif_json)
   const { results: groups } = await c.env.DB.prepare(
     'SELECT * FROM groups WHERE collection_id = ? ORDER BY (sort_order IS NULL), sort_order, id'
   ).bind(id).all()
-  for (const g of groups) g.meta = JSON.parse(g.meta_json || '{}')
+  for (const g of groups) g.meta = parseJsonObject(g.meta_json)
   return c.json({ ...col, photos, groups })
 })
 
@@ -252,10 +384,16 @@ function resolveAlias(aliases, h) {
 }
 
 // 공통 데이터: 폴더/컬렉션/별칭/이름 로드
-async function loadModelBase(db) {
-  const { results: groups } = await db.prepare('SELECT id, collection_id, name, meta_json FROM groups').all()
+async function loadModelBase(db, includeDrafts = false) {
+  const { results: groups } = await db.prepare(
+    `SELECT g.id, g.collection_id, g.name, g.meta_json
+     FROM groups g JOIN collections c ON c.id = g.collection_id
+     WHERE c.deleted_at IS NULL${includeDrafts ? '' : ' AND c.published = 1'}`
+  ).all()
   const { results: cols } = await db.prepare(
-    'SELECT id, title, date FROM collections ORDER BY (sort_order IS NOT NULL), sort_order, date DESC, id ASC'
+    `SELECT id, title, date FROM collections
+     WHERE deleted_at IS NULL${includeDrafts ? '' : ' AND published = 1'}
+     ORDER BY (sort_order IS NOT NULL), sort_order, date DESC, id ASC`
   ).all()
   const { results: aliasRows } = await db.prepare('SELECT * FROM model_aliases').all()
   const { results: nameRows } = await db.prepare('SELECT * FROM model_names').all()
@@ -264,18 +402,20 @@ async function loadModelBase(db) {
   const names = {}
   for (const n of nameRows) names[n.handle.toLowerCase()] = n.name
   for (const g of groups) {
-    g.handles = [].concat(JSON.parse(g.meta_json || '{}').twitter || [])
-    g.character = JSON.parse(g.meta_json || '{}').character || ''
+    const metadata = parseJsonObject(g.meta_json)
+    g.handles = [].concat(metadata.twitter || [])
+    g.character = metadata.character || ''
   }
   return { groups, cols, aliases, names }
 }
 
 // 모델 목록: 핸들 기준 자동 집계 (별칭 병합)
 app.get('/api/models', async (c) => {
-  const { groups, cols, aliases, names } = await loadModelBase(c.env.DB)
+  const includeDrafts = await isAdmin(c)
+  const { groups, cols, aliases, names } = await loadModelBase(c.env.DB, includeDrafts)
   const colOrder = new Map(cols.map((col, i) => [col.id, i]))
   const { results: thumbRows } = await c.env.DB.prepare(
-    'SELECT group_id, key_thumb FROM photos WHERE group_id IS NOT NULL ORDER BY (sort_order IS NULL), sort_order, taken_at, id'
+    'SELECT group_id, key_thumb FROM photos WHERE group_id IS NOT NULL AND deleted_at IS NULL ORDER BY (sort_order IS NULL), sort_order, taken_at, id'
   ).all()
   const firstThumb = {}, cnt = {}
   for (const t of thumbRows) {
@@ -311,13 +451,14 @@ app.get('/api/models', async (c) => {
 // 모델 상세: 행사별 섹션으로 사진 묶음
 app.get('/api/models/:handle', async (c) => {
   const raw = c.req.param('handle')
-  const { groups, cols, aliases, names } = await loadModelBase(c.env.DB)
+  const includeDrafts = await isAdmin(c)
+  const { groups, cols, aliases, names } = await loadModelBase(c.env.DB, includeDrafts)
   const canon = resolveAlias(aliases, raw.toLowerCase())
   const mine = groups.filter((g) => g.handles.some((h) => resolveAlias(aliases, h.toLowerCase()) === canon))
   if (!mine.length) return c.json({ error: 'not found' }, 404)
   const ids = mine.map((g) => g.id)
   const { results: photos } = await c.env.DB.prepare(
-    `SELECT * FROM photos WHERE group_id IN (${ids.map(() => '?').join(',')})
+    `SELECT * FROM photos WHERE deleted_at IS NULL AND group_id IN (${ids.map(() => '?').join(',')})
      ORDER BY (sort_order IS NULL), sort_order, taken_at, id`
   ).bind(...ids).all()
   const byGroup = {}
@@ -394,6 +535,7 @@ app.put('/api/model-names', requireAdmin, async (c) => {
 
 // 전체 사진 스트림 (Photos 페이지) — 컬렉션 표시 순서 → 사진 순서, 페이지네이션
 app.get('/api/photos', async (c) => {
+  const includeDrafts = await isAdmin(c)
   const limit = Math.min(100, +(c.req.query('limit') || 60) || 60)
   const offset = Math.max(0, +(c.req.query('offset') || 0) || 0)
   const { results } = await c.env.DB.prepare(
@@ -402,15 +544,19 @@ app.get('/api/photos', async (c) => {
      FROM photos p
      JOIN collections col ON col.id = p.collection_id
      LEFT JOIN groups g ON g.id = p.group_id
+     WHERE p.deleted_at IS NULL AND col.deleted_at IS NULL${includeDrafts ? '' : ' AND col.published = 1'}
      ORDER BY (col.sort_order IS NOT NULL), col.sort_order, col.date DESC, col.id ASC,
               (p.sort_order IS NULL), p.sort_order, p.taken_at, p.id
      LIMIT ? OFFSET ?`
   ).bind(limit, offset).all()
-  const totalRow = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM photos').first()
+  const totalRow = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM photos p JOIN collections col ON col.id = p.collection_id
+     WHERE p.deleted_at IS NULL AND col.deleted_at IS NULL${includeDrafts ? '' : ' AND col.published = 1'}`
+  ).first()
   return c.json({
     total: totalRow.n,
     photos: results.map((r) => {
-      const meta = JSON.parse(r.g_meta || '{}')
+      const meta = parseJsonObject(r.g_meta)
       return {
         key_thumb: r.key_thumb,
         key_large: r.key_large,
@@ -427,14 +573,16 @@ app.get('/api/photos', async (c) => {
 
 // 홈 랜덤 슬라이드용: 전체 사진 + 행사명 + 모델 크레딧
 app.get('/api/feature-photos', async (c) => {
+  const includeDrafts = await isAdmin(c)
   const { results } = await c.env.DB.prepare(
     `SELECT p.key_large, p.collection_id, p.group_id, col.title, g.meta_json AS g_meta
      FROM photos p
      JOIN collections col ON col.id = p.collection_id
-     LEFT JOIN groups g ON g.id = p.group_id`
+     LEFT JOIN groups g ON g.id = p.group_id
+     WHERE p.deleted_at IS NULL AND col.deleted_at IS NULL${includeDrafts ? '' : ' AND col.published = 1'}`
   ).all()
   return c.json(results.map((r) => {
-    const meta = JSON.parse(r.g_meta || '{}')
+    const meta = parseJsonObject(r.g_meta)
     return {
       key_large: r.key_large,
       collection_id: r.collection_id,
@@ -473,9 +621,114 @@ app.patch('/api/settings', requireAdmin, async (c) => {
   return c.json({ ok: true })
 })
 
+// ---------- backup + trash ----------
+app.get('/api/backup', requireAdmin, async (c) => {
+  const tables = ['collections', 'groups', 'photos', 'settings', 'model_aliases', 'model_names', 'site_daily_views']
+  const data = {}
+  for (const table of tables) {
+    const { results } = await c.env.DB.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()
+    data[table] = results
+  }
+  const generatedAt = new Date().toISOString()
+  return new Response(JSON.stringify({
+    schema_version: 1,
+    generated_at: generatedAt,
+    note: 'R2 image binaries are not embedded. Photo rows contain the R2 object keys required for recovery.',
+    data,
+  }, null, 2), {
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Disposition': `attachment; filename="moments-backup-${generatedAt.slice(0, 10)}.json"`,
+      'Cache-Control': 'no-store',
+    },
+  })
+})
+
+app.get('/api/trash', requireAdmin, async (c) => {
+  const [{ results: collections }, { results: photos }] = await c.env.DB.batch([
+    c.env.DB.prepare(
+      `SELECT c.*, COUNT(p.id) AS photo_count
+       FROM collections c LEFT JOIN photos p ON p.collection_id = c.id
+       WHERE c.deleted_at IS NOT NULL
+       GROUP BY c.id ORDER BY c.deleted_at DESC`
+    ),
+    c.env.DB.prepare(
+      `SELECT p.*, c.title AS collection_title
+       FROM photos p JOIN collections c ON c.id = p.collection_id
+       WHERE p.deleted_at IS NOT NULL AND c.deleted_at IS NULL
+       ORDER BY p.deleted_at DESC`
+    ),
+  ])
+  return c.json({ collections, photos })
+})
+
+app.post('/api/trash/collections/:id/restore', requireAdmin, async (c) => {
+  const id = c.req.param('id')
+  const col = await c.env.DB.prepare('SELECT id, purge_started_at FROM collections WHERE id = ? AND deleted_at IS NOT NULL').bind(id).first()
+  if (!col) return c.json({ error: 'not found in trash' }, 404)
+  if (col.purge_started_at) return c.json({ error: 'permanent deletion is in progress; retry permanent deletion' }, 409)
+  await c.env.DB.prepare('UPDATE collections SET deleted_at = NULL WHERE id = ?').bind(id).run()
+  return c.json({ ok: true })
+})
+
+app.post('/api/trash/photos/:id/restore', requireAdmin, async (c) => {
+  const id = c.req.param('id')
+  const photo = await c.env.DB.prepare(
+    `SELECT p.id, p.collection_id, p.purge_started_at, c.deleted_at AS collection_deleted_at
+     FROM photos p JOIN collections c ON c.id = p.collection_id
+     WHERE p.id = ? AND p.deleted_at IS NOT NULL`
+  ).bind(id).first()
+  if (!photo) return c.json({ error: 'not found in trash' }, 404)
+  if (photo.purge_started_at) return c.json({ error: 'permanent deletion is in progress; retry permanent deletion' }, 409)
+  if (photo.collection_deleted_at) return c.json({ error: 'restore the collection first' }, 409)
+  await c.env.DB.batch([
+    c.env.DB.prepare('UPDATE photos SET deleted_at = NULL WHERE id = ?').bind(id),
+    c.env.DB.prepare('UPDATE collections SET cover_photo_id = COALESCE(cover_photo_id, ?) WHERE id = ?')
+      .bind(id, photo.collection_id),
+  ])
+  return c.json({ ok: true })
+})
+
+async function deleteR2Keys(bucket, keys) {
+  for (let i = 0; i < keys.length; i += 1000) await bucket.delete(keys.slice(i, i + 1000))
+}
+
+app.delete('/api/trash/collections/:id', requireAdmin, async (c) => {
+  const id = c.req.param('id')
+  const col = await c.env.DB.prepare('SELECT id FROM collections WHERE id = ? AND deleted_at IS NOT NULL').bind(id).first()
+  if (!col) return c.json({ error: 'not found in trash' }, 404)
+  await c.env.DB.prepare('UPDATE collections SET purge_started_at = COALESCE(purge_started_at, ?) WHERE id = ?')
+    .bind(new Date().toISOString(), id).run()
+  const { results: photos } = await c.env.DB.prepare(
+    'SELECT key_large, key_thumb FROM photos WHERE collection_id = ?'
+  ).bind(id).all()
+  await deleteR2Keys(c.env.PHOTOS, photos.flatMap((p) => [p.key_large, p.key_thumb]))
+  await c.env.DB.batch([
+    c.env.DB.prepare('DELETE FROM photos WHERE collection_id = ?').bind(id),
+    c.env.DB.prepare('DELETE FROM groups WHERE collection_id = ?').bind(id),
+    c.env.DB.prepare('DELETE FROM collections WHERE id = ?').bind(id),
+    c.env.DB.prepare("UPDATE settings SET value = '' WHERE key = 'featured_collection_id' AND value = ?").bind(String(id)),
+  ])
+  return c.json({ ok: true })
+})
+
+app.delete('/api/trash/photos/:id', requireAdmin, async (c) => {
+  const id = c.req.param('id')
+  const photo = await c.env.DB.prepare('SELECT * FROM photos WHERE id = ? AND deleted_at IS NOT NULL').bind(id).first()
+  if (!photo) return c.json({ error: 'not found in trash' }, 404)
+  await c.env.DB.prepare('UPDATE photos SET purge_started_at = COALESCE(purge_started_at, ?) WHERE id = ?')
+    .bind(new Date().toISOString(), id).run()
+  await deleteR2Keys(c.env.PHOTOS, [photo.key_large, photo.key_thumb])
+  await c.env.DB.prepare('DELETE FROM photos WHERE id = ?').bind(id).run()
+  return c.json({ ok: true })
+})
+
 // ---------- groups (컬렉션 안의 사람별 폴더) ----------
 app.post('/api/collections/:id/groups', requireAdmin, async (c) => {
   const collectionId = c.req.param('id')
+  const col = await c.env.DB.prepare('SELECT id FROM collections WHERE id = ? AND deleted_at IS NULL')
+    .bind(collectionId).first()
+  if (!col) return c.json({ error: 'collection not found' }, 404)
   const { name } = await c.req.json()
   if (!name) return c.json({ error: 'name required' }, 400)
   const { meta } = await c.env.DB.prepare(
@@ -491,7 +744,7 @@ app.patch('/api/groups/:id', requireAdmin, async (c) => {
   const body = await c.req.json()
   const name = 'name' in body ? body.name : g.name
   if (!name) return c.json({ error: 'name required' }, 400)
-  const meta = JSON.parse(g.meta_json || '{}')
+  const meta = parseJsonObject(g.meta_json)
   // 모델(코스어) X 핸들 — 쉼표/공백 구분으로 여러 명 가능, 빈 문자열이면 삭제
   if ('twitter' in body) {
     const handles = String(body.twitter || '')
@@ -525,47 +778,87 @@ app.delete('/api/groups/:id', requireAdmin, async (c) => {
 app.patch('/api/collections/:id', requireAdmin, async (c) => {
   const id = c.req.param('id')
   const body = await c.req.json()
-  const fields = ['title', 'date', 'description', 'cover_photo_id']
+  if ('cover_photo_id' in body && body.cover_photo_id != null) {
+    const photo = await c.env.DB.prepare(
+      'SELECT id FROM photos WHERE id = ? AND collection_id = ? AND deleted_at IS NULL'
+    ).bind(body.cover_photo_id, id).first()
+    if (!photo) return c.json({ error: 'cover photo does not belong to collection' }, 400)
+  }
+  const fields = ['title', 'date', 'description', 'cover_photo_id', 'published']
   const sets = [], vals = []
   for (const f of fields) {
-    if (f in body) { sets.push(`${f} = ?`); vals.push(body[f]) }
+    if (f in body) {
+      if (f === 'published' && ![0, 1, false, true].includes(body[f])) return c.json({ error: 'published must be boolean' }, 400)
+      sets.push(`${f} = ?`)
+      vals.push(f === 'published' ? (body[f] ? 1 : 0) : body[f])
+    }
   }
   if (!sets.length) return c.json({ error: 'no fields' }, 400)
-  await c.env.DB.prepare(`UPDATE collections SET ${sets.join(', ')} WHERE id = ?`)
+  const result = await c.env.DB.prepare(`UPDATE collections SET ${sets.join(', ')} WHERE id = ? AND deleted_at IS NULL`)
     .bind(...vals, id).run()
+  if (!result.meta.changes) return c.json({ error: 'not found' }, 404)
   return c.json({ ok: true })
 })
 
 app.delete('/api/collections/:id', requireAdmin, async (c) => {
   const id = c.req.param('id')
-  const { results: photos } = await c.env.DB.prepare(
-    'SELECT key_large, key_thumb FROM photos WHERE collection_id = ?'
-  ).bind(id).all()
-  const keys = photos.flatMap((p) => [p.key_large, p.key_thumb])
-  if (keys.length) await c.env.PHOTOS.delete(keys)
-  await c.env.DB.batch([
-    c.env.DB.prepare('DELETE FROM photos WHERE collection_id = ?').bind(id),
-    c.env.DB.prepare('DELETE FROM collections WHERE id = ?').bind(id),
-  ])
+  const col = await c.env.DB.prepare('SELECT id FROM collections WHERE id = ? AND deleted_at IS NULL').bind(id).first()
+  if (!col) return c.json({ error: 'not found' }, 404)
+  const deletedAt = new Date().toISOString()
+  await c.env.DB.prepare('UPDATE collections SET deleted_at = ? WHERE id = ?').bind(deletedAt, id).run()
   return c.json({ ok: true })
 })
 
 // ---------- photos ----------
+export async function persistUpload({ bucket, keyLarge, keyThumb, large, thumb, insertPhoto }) {
+  const storedKeys = []
+  try {
+    await bucket.put(keyLarge, large.stream(), { httpMetadata: { contentType: large.type } })
+    storedKeys.push(keyLarge)
+    await bucket.put(keyThumb, thumb.stream(), { httpMetadata: { contentType: thumb.type } })
+    storedKeys.push(keyThumb)
+    return await insertPhoto()
+  } catch (error) {
+    if (storedKeys.length) {
+      try { await bucket.delete(storedKeys) } catch (cleanupError) {
+        console.error(JSON.stringify({ message: 'upload rollback failed', keys: storedKeys, error: String(cleanupError) }))
+      }
+    }
+    throw error
+  }
+}
+
 app.post('/api/collections/:id/photos', requireAdmin, async (c) => {
   const collectionId = c.req.param('id')
-  const col = await c.env.DB.prepare('SELECT id, cover_photo_id FROM collections WHERE id = ?')
+  const col = await c.env.DB.prepare('SELECT id, cover_photo_id FROM collections WHERE id = ? AND deleted_at IS NULL')
     .bind(collectionId).first()
   if (!col) return c.json({ error: 'collection not found' }, 404)
 
   const form = await c.req.formData()
   const large = form.get('large')
   const thumb = form.get('thumb')
-  if (!large || !thumb) return c.json({ error: 'large and thumb files required' }, 400)
+  if (!large || !thumb || typeof large === 'string' || typeof thumb === 'string') {
+    return c.json({ error: 'large and thumb files required' }, 400)
+  }
+  const allowedTypes = new Set(['image/jpeg', 'image/webp'])
+  if (!allowedTypes.has(large.type) || !allowedTypes.has(thumb.type)) {
+    return c.json({ error: 'only JPEG and WebP images are allowed' }, 415)
+  }
 
   const width = parseInt(form.get('width') || '0', 10)
   const height = parseInt(form.get('height') || '0', 10)
-  const takenAt = form.get('taken_at') || ''
-  const exifJson = form.get('exif') || '{}'
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width < 1 || height < 1 || width > 20000 || height > 20000) {
+    return c.json({ error: 'invalid image dimensions' }, 400)
+  }
+  const takenAt = String(form.get('taken_at') || '')
+  const exifRaw = String(form.get('exif') || '{}')
+  if (exifRaw.length > 64 * 1024) return c.json({ error: 'exif metadata is too large' }, 413)
+  let parsedExif
+  try { parsedExif = JSON.parse(exifRaw) } catch { return c.json({ error: 'invalid exif JSON' }, 400) }
+  if (!parsedExif || typeof parsedExif !== 'object' || Array.isArray(parsedExif)) {
+    return c.json({ error: 'exif metadata must be an object' }, 400)
+  }
+  const exifJson = JSON.stringify(parsedExif)
   let groupId = parseInt(form.get('group_id') || '0', 10) || null
   if (groupId) {
     const g = await c.env.DB.prepare('SELECT id FROM groups WHERE id = ? AND collection_id = ?')
@@ -577,18 +870,27 @@ app.post('/api/collections/:id/photos', requireAdmin, async (c) => {
   const ext = (large.type === 'image/jpeg') ? 'jpg' : 'webp'
   const keyLarge = `p/${collectionId}/${uuid}-l.${ext}`
   const keyThumb = `p/${collectionId}/${uuid}-t.${ext}`
-  await c.env.PHOTOS.put(keyLarge, large.stream(), { httpMetadata: { contentType: large.type } })
-  await c.env.PHOTOS.put(keyThumb, thumb.stream(), { httpMetadata: { contentType: thumb.type } })
-
-  const { meta } = await c.env.DB.prepare(
-    `INSERT INTO photos (collection_id, group_id, key_large, key_thumb, width, height, taken_at, exif_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(collectionId, groupId, keyLarge, keyThumb, width, height, takenAt, exifJson).run()
+  const { meta } = await persistUpload({
+    bucket: c.env.PHOTOS,
+    keyLarge,
+    keyThumb,
+    large,
+    thumb,
+    insertPhoto: () => c.env.DB.prepare(
+      `INSERT INTO photos (collection_id, group_id, key_large, key_thumb, width, height, taken_at, exif_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(collectionId, groupId, keyLarge, keyThumb, width, height, takenAt, exifJson).run(),
+  })
 
   // 첫 사진이면 자동으로 대표 지정
   if (!col.cover_photo_id) {
-    await c.env.DB.prepare('UPDATE collections SET cover_photo_id = ? WHERE id = ?')
-      .bind(meta.last_row_id, collectionId).run()
+    try {
+      await c.env.DB.prepare('UPDATE collections SET cover_photo_id = ? WHERE id = ? AND cover_photo_id IS NULL')
+        .bind(meta.last_row_id, collectionId).run()
+    } catch (error) {
+      // 사진과 DB 행은 이미 일관된 상태이므로 업로드를 실패로 돌리지 않고 다음 관리 작업에서 복구합니다.
+      console.error(JSON.stringify({ message: 'cover assignment failed', collectionId, photoId: meta.last_row_id, error: String(error) }))
+    }
   }
   return c.json({ id: meta.last_row_id, key_large: keyLarge, key_thumb: keyThumb })
 })
@@ -596,6 +898,14 @@ app.post('/api/collections/:id/photos', requireAdmin, async (c) => {
 // 사진을 다른 폴더로 이동 (group_id: null = 컬렉션 바로 아래)
 app.patch('/api/photos/:id', requireAdmin, async (c) => {
   const { group_id = null } = await c.req.json()
+  const photo = await c.env.DB.prepare('SELECT collection_id FROM photos WHERE id = ? AND deleted_at IS NULL')
+    .bind(c.req.param('id')).first()
+  if (!photo) return c.json({ error: 'not found' }, 404)
+  if (group_id != null) {
+    const group = await c.env.DB.prepare('SELECT id FROM groups WHERE id = ? AND collection_id = ?')
+      .bind(group_id, photo.collection_id).first()
+    if (!group) return c.json({ error: 'group does not belong to collection' }, 400)
+  }
   await c.env.DB.prepare('UPDATE photos SET group_id = ? WHERE id = ?')
     .bind(group_id, c.req.param('id')).run()
   return c.json({ ok: true })
@@ -603,16 +913,16 @@ app.patch('/api/photos/:id', requireAdmin, async (c) => {
 
 app.delete('/api/photos/:id', requireAdmin, async (c) => {
   const id = c.req.param('id')
-  const photo = await c.env.DB.prepare('SELECT * FROM photos WHERE id = ?').bind(id).first()
+  const photo = await c.env.DB.prepare('SELECT * FROM photos WHERE id = ? AND deleted_at IS NULL').bind(id).first()
   if (!photo) return c.json({ error: 'not found' }, 404)
-  await c.env.PHOTOS.delete([photo.key_large, photo.key_thumb])
-  await c.env.DB.prepare('DELETE FROM photos WHERE id = ?').bind(id).run()
+  await c.env.DB.prepare('UPDATE photos SET deleted_at = ? WHERE id = ?')
+    .bind(new Date().toISOString(), id).run()
   // 대표 사진이었으면 다른 사진으로 교체
   const col = await c.env.DB.prepare('SELECT cover_photo_id FROM collections WHERE id = ?')
     .bind(photo.collection_id).first()
   if (col && col.cover_photo_id === photo.id) {
     const next = await c.env.DB.prepare(
-      'SELECT id FROM photos WHERE collection_id = ? ORDER BY (sort_order IS NULL), sort_order, taken_at, id LIMIT 1'
+      'SELECT id FROM photos WHERE collection_id = ? AND deleted_at IS NULL ORDER BY (sort_order IS NULL), sort_order, taken_at, id LIMIT 1'
     ).bind(photo.collection_id).first()
     await c.env.DB.prepare('UPDATE collections SET cover_photo_id = ? WHERE id = ?')
       .bind(next ? next.id : null, photo.collection_id).run()
@@ -658,6 +968,54 @@ app.get('/api/fetch-image', requireAdmin, async (c) => {
 // 문구는 public/config.js와 맞춰서 관리
 const OG_TITLE = 'Moments Kept in Light'
 const OG_DESC = 'The moments we met, frame by frame.'
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[ch])
+}
+
+app.get('/share/collection/:id', async (c) => {
+  const id = c.req.param('id')
+  const col = await c.env.DB.prepare(
+    `SELECT c.id, c.title, c.description, p.key_large
+     FROM collections c
+     LEFT JOIN photos p ON p.id = c.cover_photo_id AND p.deleted_at IS NULL
+     WHERE c.id = ? AND c.published = 1 AND c.deleted_at IS NULL`
+  ).bind(id).first()
+  if (!col) return c.text('not found', 404)
+  if (!col.key_large) {
+    const first = await c.env.DB.prepare(
+      'SELECT key_large FROM photos WHERE collection_id = ? AND deleted_at IS NULL ORDER BY (sort_order IS NULL), sort_order, taken_at, id LIMIT 1'
+    ).bind(id).first()
+    col.key_large = first?.key_large || null
+  }
+  const origin = new URL(c.req.url).origin
+  const shareUrl = `${origin}/share/collection/${id}`
+  const galleryUrl = `${origin}/#/c/${id}`
+  const imageUrl = col.key_large ? `${origin}/img/${col.key_large}` : `${origin}/og.png`
+  const title = col.title || OG_TITLE
+  const description = col.description || OG_DESC
+  const html = `<!doctype html>
+<html lang="ko"><head><meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>${escapeHtml(title)} · ${escapeHtml(OG_TITLE)}</title>
+<meta name="description" content="${escapeHtml(description)}" />
+<meta property="og:type" content="website" />
+<meta property="og:title" content="${escapeHtml(title)}" />
+<meta property="og:description" content="${escapeHtml(description)}" />
+<meta property="og:url" content="${escapeHtml(shareUrl)}" />
+<meta property="og:image" content="${escapeHtml(imageUrl)}" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="${escapeHtml(title)}" />
+<meta name="twitter:description" content="${escapeHtml(description)}" />
+<meta name="twitter:image" content="${escapeHtml(imageUrl)}" />
+<link rel="canonical" href="${escapeHtml(galleryUrl)}" />
+<meta http-equiv="refresh" content="0;url=${escapeHtml(galleryUrl)}" />
+</head><body><p><a href="${escapeHtml(galleryUrl)}">컬렉션 보기</a></p>
+<script>location.replace(${JSON.stringify(galleryUrl)})</script></body></html>`
+  return c.html(html, 200, { 'Cache-Control': 'public, max-age=300' })
+})
 
 app.get('/', async (c) => {
   // 로그인한 관리자의 갤러리 확인은 조회수에서 제외합니다.

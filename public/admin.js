@@ -1,5 +1,12 @@
 // ---------- 관리자 페이지: 로그인 → 컬렉션 관리 → 업로드 ----------
 const app = document.getElementById('app')
+let activeUploads = 0
+
+window.addEventListener('beforeunload', (e) => {
+  if (!activeUploads) return
+  e.preventDefault()
+  e.returnValue = ''
+})
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (ch) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]))
@@ -13,6 +20,19 @@ async function api(path, opts = {}) {
   const res = await fetch('/api' + path, opts)
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.status)
   return res.json()
+}
+
+async function downloadBackup() {
+  const res = await fetch('/api/backup')
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.status)
+  const blob = await res.blob()
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = `moments-backup-${new Date().toISOString().slice(0, 10)}.json`
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000)
 }
 
 // ---------- login ----------
@@ -40,7 +60,8 @@ async function boot() {
 
 // ---------- collections list ----------
 async function renderCollections() {
-  const [cols, stats] = await Promise.all([api('/collections'), api('/stats')])
+  const [allCols, stats] = await Promise.all([api('/collections'), api('/stats')])
+  const cols = allCols.filter((c) => !c.deleted_at)
   const daily = stats.daily || []
   const maxViews = Math.max(1, ...daily.map((d) => d.views))
   const firstDate = daily[0]?.view_date?.slice(5).replace('-', '.') || ''
@@ -49,6 +70,8 @@ async function renderCollections() {
     <div class="topbar">
       <h2>컬렉션 관리</h2>
       <div class="r">
+        <button id="backupBtn">백업(JSON)</button>
+        <button id="trashBtn">휴지통</button>
         <button id="gridBtnMain">그리드 이미지</button>
         <button id="modelMgrBtn">모델 관리</button>
         <button id="aboutBtn">About 편집</button>
@@ -85,7 +108,7 @@ async function renderCollections() {
             ${c.cover_thumb ? `<img src="/img/${esc(c.cover_thumb)}" />` : '<div class="ph-placeholder"></div>'}
             <div class="t">
               <div class="title">${esc(c.title)}</div>
-              <div class="info">${esc(c.date)}${c.date ? ' · ' : ''}${c.photo_count}장</div>
+              <div class="info">${esc(c.date)}${c.date ? ' · ' : ''}${c.photo_count}장 · ${c.published === 0 ? '비공개' : '공개'}</div>
             </div>
             <div class="ord-btns">
               <button class="colUp" title="위로">▲</button>
@@ -95,6 +118,10 @@ async function renderCollections() {
       </div>
     </div>`
 
+  document.getElementById('backupBtn').addEventListener('click', async () => {
+    try { await downloadBackup() } catch (e) { alert('백업 다운로드 실패: ' + e.message) }
+  })
+  document.getElementById('trashBtn').addEventListener('click', openTrash)
   document.getElementById('gridBtnMain').addEventListener('click', openGridMaker)
   document.getElementById('modelMgrBtn').addEventListener('click', openModelManager)
   document.getElementById('aboutBtn').addEventListener('click', openAboutEditor)
@@ -137,6 +164,51 @@ async function renderCollections() {
       e.stopPropagation()
       moveCollection(+e.target.closest('.col-item').dataset.id, 1)
     }))
+}
+
+// ---------- trash ----------
+async function openTrash() {
+  const overlay = document.createElement('div')
+  overlay.className = 'grid-maker'
+  overlay.innerHTML = '<div class="inner"><div class="gm-top"><h3>휴지통</h3><button id="trashClose">닫기</button></div><div id="trashBody" class="panel"><p class="muted">불러오는 중…</p></div></div>'
+  document.body.appendChild(overlay)
+  document.body.style.overflow = 'hidden'
+
+  const close = () => { document.body.style.overflow = ''; overlay.remove() }
+  overlay.querySelector('#trashClose').addEventListener('click', close)
+
+  const load = async () => {
+    const { collections = [], photos = [] } = await api('/trash')
+    const body = overlay.querySelector('#trashBody')
+    body.innerHTML = `
+      <h3>삭제된 컬렉션 <span class="muted">${collections.length}개</span></h3>
+      ${collections.map((c) => `
+        <div class="trash-item" data-type="collections" data-id="${c.id}">
+          <div class="t"><div class="title">${esc(c.title)}</div><div class="info">${esc(c.deleted_at || '')}</div></div>
+          <button class="trashRestore">복구</button><button class="trashDelete danger">영구 삭제</button>
+        </div>`).join('') || '<p class="muted">삭제된 컬렉션이 없습니다.</p>'}
+      <h3 style="margin-top:28px">삭제된 사진 <span class="muted">${photos.length}장</span></h3>
+      ${photos.map((p) => `
+        <div class="trash-item" data-type="photos" data-id="${p.id}">
+          ${p.key_thumb ? `<img src="/img/${esc(p.key_thumb)}" />` : ''}
+          <div class="t"><div class="title">${esc(p.filename || p.collection_title || `사진 #${p.id}`)}</div><div class="info">${esc(p.deleted_at || '')}</div></div>
+          <button class="trashRestore">복구</button><button class="trashDelete danger">영구 삭제</button>
+        </div>`).join('') || '<p class="muted">삭제된 사진이 없습니다.</p>'}`
+
+    body.querySelectorAll('.trashRestore').forEach((button) => button.addEventListener('click', async () => {
+      const item = button.closest('.trash-item')
+      await api(`/trash/${item.dataset.type}/${item.dataset.id}/restore`, { method: 'POST' })
+      load()
+    }))
+    body.querySelectorAll('.trashDelete').forEach((button) => button.addEventListener('click', async () => {
+      const item = button.closest('.trash-item')
+      if (!confirm('영구 삭제하면 복구할 수 없습니다. 계속할까요?')) return
+      await api(`/trash/${item.dataset.type}/${item.dataset.id}`, { method: 'DELETE' })
+      load()
+    }))
+  }
+
+  try { await load() } catch (e) { overlay.querySelector('#trashBody').innerHTML = `<p class="muted">휴지통을 불러오지 못했습니다: ${esc(e.message)}</p>` }
 }
 
 // ---------- single collection: upload + manage ----------
@@ -191,6 +263,7 @@ async function renderCollection(id) {
       <h2>${esc(col.title)} <span class="muted">${esc(col.date)}${isFeatured ? ' · 메인에 걸림' : ''}</span></h2>
       <div class="r">
         <button id="backBtn">← 목록</button>
+        <button id="publishBtn">${col.published === 0 ? '공개하기' : '비공개로 전환'}</button>
         <button id="featureBtn">${isFeatured ? '메인 해제' : '메인에 걸기'}</button>
         <button id="newGrpBtn">+ 사람 폴더</button>
         <button id="gridBtn">그리드 이미지</button>
@@ -209,6 +282,11 @@ async function renderCollection(id) {
     ${groups.map((g) => sectionHtml(col, g, col.photos.filter((p) => p.group_id === g.id))).join('')}`
 
   document.getElementById('backBtn').addEventListener('click', renderCollections)
+  document.getElementById('publishBtn').addEventListener('click', async () => {
+    const published = col.published === 0 ? 1 : 0
+    await api('/collections/' + id, { method: 'PATCH', json: { published } })
+    renderCollection(id)
+  })
   document.getElementById('newGrpBtn').addEventListener('click', async () => {
     const name = prompt('폴더 이름 (예: 인물/캐릭터 이름)')
     if (!name || !name.trim()) return
@@ -221,7 +299,7 @@ async function renderCollection(id) {
   })
   document.getElementById('gridBtn').addEventListener('click', openGridMaker)
   document.getElementById('delColBtn').addEventListener('click', async () => {
-    if (!confirm(`"${col.title}" 컬렉션과 사진 ${col.photos.length}장을 모두 삭제할까요?`)) return
+    if (!confirm(`"${col.title}" 컬렉션과 사진 ${col.photos.length}장을 휴지통으로 옮길까요?`)) return
     await api('/collections/' + id, { method: 'DELETE' })
     renderCollections()
   })
@@ -944,19 +1022,39 @@ async function uploadOne(collectionId, groupId, file) {
 
 async function uploadFiles(collectionId, groupId, files, status) {
   if (!files.length) return
-  let done = 0, failed = 0
-  for (const file of files) {
-    status.textContent = `업로드 중… ${done + failed + 1} / ${files.length} (${file.name})`
-    try {
-      await uploadOne(collectionId, groupId, file)
-      done++
-    } catch (e) {
-      console.error(file.name, e)
-      failed++
+  activeUploads++
+  let done = 0
+  const failed = []
+  try {
+    for (const file of files) {
+      status.textContent = `업로드 중… ${done + failed.length + 1} / ${files.length} (${file.name})`
+      try {
+        await uploadOne(collectionId, groupId, file)
+        done++
+      } catch (e) {
+        console.error(file.name, e)
+        failed.push({ file, error: e.message || '업로드 실패' })
+      }
     }
+  } finally {
+    activeUploads--
   }
-  status.textContent = `완료: ${done}장 업로드${failed ? `, ${failed}장 실패` : ''}`
-  renderCollection(collectionId)
+
+  await renderCollection(collectionId)
+  const sec = [...app.querySelectorAll('.section')].find((el) =>
+    (el.dataset.gid ? +el.dataset.gid : null) === groupId)
+  const nextStatus = sec && sec.querySelector('.upload-status')
+  if (!nextStatus) return
+  if (!failed.length) {
+    nextStatus.textContent = `완료: ${done}장 업로드`
+    return
+  }
+  nextStatus.innerHTML = `
+    <div>완료: ${done}장 업로드, ${failed.length}장 실패</div>
+    <ul class="upload-fail-list">${failed.map(({ file, error }) => `<li>${esc(file.name)} — ${esc(error)}</li>`).join('')}</ul>
+    <button class="retryUploads">실패 항목 재시도</button>`
+  nextStatus.querySelector('.retryUploads').addEventListener('click', () =>
+    uploadFiles(collectionId, groupId, failed.map(({ file }) => file), nextStatus))
 }
 
 boot()
