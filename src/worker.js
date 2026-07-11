@@ -606,12 +606,12 @@ app.post('/api/backups', requireAdmin, async (c) => {
   const { results } = await c.env.DB.prepare('SELECT key_large, key_thumb FROM photos ORDER BY id').all()
   const keys = [...new Set(results.flatMap((photo) => [photo.key_large, photo.key_thumb]).filter(Boolean))]
   const manifest = { id, created_at: new Date().toISOString(), status: 'pending', completed: 0, objects: keys.map((key) => ({ key })) }
-  await writeBackupManifest(c.env.PHOTOS, manifest)
+  await writeBackupManifest(c.env.BACKUPS, manifest)
   return c.json({ id, object_count: keys.length, completed: 0, done: keys.length === 0 })
 })
 
 app.post('/api/backups/:id/run', requireAdmin, async (c) => {
-  const manifest = await readBackupManifest(c.env.PHOTOS, c.req.param('id'))
+  const manifest = await readBackupManifest(c.env.BACKUPS, c.req.param('id'))
   if (!manifest) return c.json({ error: 'backup not found' }, 404)
   if (manifest.status === 'complete') return c.json({ id: manifest.id, object_count: manifest.objects.length, completed: manifest.completed, done: true })
   manifest.status = 'running'
@@ -627,7 +627,7 @@ app.post('/api/backups/:id/run', requireAdmin, async (c) => {
     entry.backup_key = `${BACKUP_PREFIX}${manifest.id}/objects/${entry.key}`
     entry.size = source.size
     entry.etag = source.etag
-    await c.env.PHOTOS.put(entry.backup_key, source.body, { httpMetadata: source.httpMetadata, customMetadata: source.customMetadata })
+    await c.env.BACKUPS.put(entry.backup_key, source.body, { httpMetadata: source.httpMetadata, customMetadata: source.customMetadata })
     manifest.completed = index + 1
   }
   const done = manifest.completed >= manifest.objects.length
@@ -635,18 +635,18 @@ app.post('/api/backups/:id/run', requireAdmin, async (c) => {
     manifest.status = 'complete'
     manifest.completed_at = new Date().toISOString()
   }
-  await writeBackupManifest(c.env.PHOTOS, manifest)
-  if (done) await rotateBackups(c.env.PHOTOS)
+  await writeBackupManifest(c.env.BACKUPS, manifest)
+  if (done) await rotateBackups(c.env.BACKUPS)
   return c.json({ id: manifest.id, object_count: manifest.objects.length, completed: manifest.completed, done })
 })
 
 app.get('/api/backups', requireAdmin, async (c) => {
-  const manifests = (await listAllObjects(c.env.PHOTOS, BACKUP_PREFIX))
+  const manifests = (await listAllObjects(c.env.BACKUPS, BACKUP_PREFIX))
     .filter((object) => object.key.endsWith('/manifest.json'))
     .sort((a, b) => b.key.localeCompare(a.key))
   const backups = []
   for (const object of manifests) {
-    const stored = await c.env.PHOTOS.get(object.key)
+    const stored = await c.env.BACKUPS.get(object.key)
     if (stored) backups.push(JSON.parse(await stored.text()))
   }
   return c.json(backups.map(({ id, created_at, status, completed = 0, objects }) => ({
@@ -655,7 +655,7 @@ app.get('/api/backups', requireAdmin, async (c) => {
 })
 
 app.post('/api/backups/:id/restore', requireAdmin, async (c) => {
-  const manifest = await readBackupManifest(c.env.PHOTOS, c.req.param('id'))
+  const manifest = await readBackupManifest(c.env.BACKUPS, c.req.param('id'))
   if (!manifest) return c.json({ error: 'backup not found' }, 404)
   if (manifest.status !== 'complete') return c.json({ error: 'backup is not complete' }, 409)
   const body = await c.req.json().catch(() => ({}))
@@ -664,7 +664,7 @@ app.post('/api/backups/:id/restore', requireAdmin, async (c) => {
   let restored = 0
   for (const entry of entries) {
     if (!entry.backup_key) continue
-    const source = await c.env.PHOTOS.get(entry.backup_key)
+    const source = await c.env.BACKUPS.get(entry.backup_key)
     if (!source) return c.json({ error: `backup object missing: ${entry.key}` }, 409)
     await c.env.PHOTOS.put(entry.key, source.body, { httpMetadata: source.httpMetadata, customMetadata: source.customMetadata })
     restored++
@@ -676,8 +676,8 @@ app.post('/api/backups/:id/restore', requireAdmin, async (c) => {
 app.delete('/api/backups/:id', requireAdmin, async (c) => {
   const id = c.req.param('id')
   if (!validBackupId(id)) return c.json({ error: 'invalid backup id' }, 400)
-  if (!(await c.env.PHOTOS.head(`${BACKUP_PREFIX}${id}/manifest.json`))) return c.json({ error: 'backup not found' }, 404)
-  await deleteBackup(c.env.PHOTOS, id)
+  if (!(await c.env.BACKUPS.head(`${BACKUP_PREFIX}${id}/manifest.json`))) return c.json({ error: 'backup not found' }, 404)
+  await deleteBackup(c.env.BACKUPS, id)
   return c.json({ ok: true })
 })
 
@@ -760,7 +760,7 @@ app.delete('/api/trash/collections/:id', requireAdmin, async (c) => {
   ).bind(id).all()
   const keys = photos.flatMap((p) => [p.key_large, p.key_thumb])
   await deleteR2Keys(c.env.PHOTOS, keys)
-  if (c.req.query('purge_backups') === '1') await removeKeysFromBackups(c.env.PHOTOS, keys)
+  if (c.req.query('purge_backups') === '1') await removeKeysFromBackups(c.env.BACKUPS, keys)
   await c.env.DB.batch([
     c.env.DB.prepare('DELETE FROM photos WHERE collection_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM groups WHERE collection_id = ?').bind(id),
@@ -778,7 +778,7 @@ app.delete('/api/trash/photos/:id', requireAdmin, async (c) => {
     .bind(new Date().toISOString(), id).run()
   await deleteR2Keys(c.env.PHOTOS, [photo.key_large, photo.key_thumb])
   if (c.req.query('purge_backups') === '1') {
-    await removeKeysFromBackups(c.env.PHOTOS, [photo.key_large, photo.key_thumb])
+    await removeKeysFromBackups(c.env.BACKUPS, [photo.key_large, photo.key_thumb])
   }
   await c.env.DB.prepare('DELETE FROM photos WHERE id = ?').bind(id).run()
   return c.json({ ok: true })

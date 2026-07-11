@@ -29,6 +29,10 @@
     {
       "binding": "PHOTOS",
       "bucket_name": "pht-pp-photos"
+    },
+    {
+      "binding": "BACKUPS",
+      "bucket_name": "pht-pp-backups"
     }
   ]
   // ADMIN_PASSWORD: 로컬은 .dev.vars, 프로덕션은 `wrangler secret put ADMIN_PASSWORD`

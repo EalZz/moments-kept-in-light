@@ -263,18 +263,19 @@ describe('trash and backup', () => {
         method: 'POST', headers: { Cookie: cookie },
       })).json()
     }
-    expect(await env.PHOTOS.head(`_backups/${backup.id}/objects/erase-large`)).not.toBeNull()
+    expect(await env.BACKUPS.head(`_backups/${backup.id}/objects/erase-large`)).not.toBeNull()
+    expect(await env.PHOTOS.head(`_backups/${backup.id}/objects/erase-large`)).toBeNull()
     await SELF.fetch(`https://example.com/api/photos/${inserted.meta.last_row_id}`, { method: 'DELETE', headers: { Cookie: cookie } })
     const purged = await SELF.fetch(`https://example.com/api/trash/photos/${inserted.meta.last_row_id}?purge_backups=1`, {
       method: 'DELETE', headers: { Cookie: cookie },
     })
     expect(purged.status).toBe(200)
-    expect(await env.PHOTOS.head(`_backups/${backup.id}/objects/erase-large`)).toBeNull()
-    const manifest = JSON.parse(await (await env.PHOTOS.get(`_backups/${backup.id}/manifest.json`)).text())
+    expect(await env.BACKUPS.head(`_backups/${backup.id}/objects/erase-large`)).toBeNull()
+    const manifest = JSON.parse(await (await env.BACKUPS.get(`_backups/${backup.id}/manifest.json`)).text())
     expect(manifest.objects).toHaveLength(0)
     const deleted = await SELF.fetch(`https://example.com/api/backups/${backup.id}`, { method: 'DELETE', headers: { Cookie: cookie } })
     expect(deleted.status).toBe(200)
-    expect(await env.PHOTOS.head(`_backups/${backup.id}/manifest.json`)).toBeNull()
+    expect(await env.BACKUPS.head(`_backups/${backup.id}/manifest.json`)).toBeNull()
   })
 })
 

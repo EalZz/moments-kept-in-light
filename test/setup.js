@@ -20,4 +20,10 @@ beforeEach(async () => {
     if (listed.objects.length) await env.PHOTOS.delete(listed.objects.map((object) => object.key))
     cursor = listed.truncated ? listed.cursor : undefined
   } while (cursor)
+  cursor = undefined
+  do {
+    const listed = await env.BACKUPS.list({ cursor })
+    if (listed.objects.length) await env.BACKUPS.delete(listed.objects.map((object) => object.key))
+    cursor = listed.truncated ? listed.cursor : undefined
+  } while (cursor)
 })
