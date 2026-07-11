@@ -73,6 +73,11 @@ async function initializeDb(db) {
       attempts INTEGER NOT NULL DEFAULT 0,
       window_started_at INTEGER NOT NULL
     )`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS admin_sessions (
+      id TEXT PRIMARY KEY,
+      expires_at INTEGER NOT NULL,
+      created_at TEXT DEFAULT (datetime('now'))
+    )`),
   ])
   await ensureColumn(db, 'photos', 'group_id', 'INTEGER')
   await ensureColumn(db, 'collections', 'meta_json', "TEXT DEFAULT '{}'")
@@ -90,6 +95,7 @@ async function initializeDb(db) {
     db.prepare('CREATE INDEX IF NOT EXISTS idx_photos_collection_order ON photos(collection_id, deleted_at, sort_order, taken_at, id)'),
     db.prepare('CREATE INDEX IF NOT EXISTS idx_photos_group ON photos(group_id, deleted_at, sort_order, id)'),
     db.prepare('CREATE INDEX IF NOT EXISTS idx_groups_collection_order ON groups(collection_id, sort_order, id)'),
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_admin_sessions_expiry ON admin_sessions(expires_at)'),
   ])
   initialized = true
 }
@@ -141,7 +147,10 @@ async function signSession(payload, password) {
 }
 async function createSessionToken(env) {
   const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000
-  const payload = `${expiresAt}.${crypto.randomUUID()}`
+  const sessionId = crypto.randomUUID()
+  const payload = `${expiresAt}.${sessionId}`
+  await env.DB.prepare('INSERT INTO admin_sessions (id, expires_at) VALUES (?, ?)')
+    .bind(sessionId, expiresAt).run()
   return `${toBase64Url(payload)}.${await signSession(payload, env.ADMIN_PASSWORD)}`
 }
 async function verifySessionToken(token, env) {
@@ -155,9 +164,12 @@ async function verifySessionToken(token, env) {
   } catch {
     return false
   }
-  const expiresAt = Number(payload.split('.')[0])
-  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return false
-  return safeEqual(token.slice(split + 1), await signSession(payload, env.ADMIN_PASSWORD))
+  const [expiresRaw, sessionId] = payload.split('.')
+  const expiresAt = Number(expiresRaw)
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now() || !sessionId) return false
+  if (!(await safeEqual(token.slice(split + 1), await signSession(payload, env.ADMIN_PASSWORD)))) return false
+  return Boolean(await env.DB.prepare('SELECT id FROM admin_sessions WHERE id = ? AND expires_at = ?')
+    .bind(sessionId, expiresAt).first())
 }
 async function isAdmin(c) {
   const tok = getCookie(c, 'session')
@@ -209,6 +221,7 @@ app.post('/api/login', async (c) => {
     return c.json({ error: 'wrong password' }, 401)
   }
   await c.env.DB.prepare('DELETE FROM login_attempts WHERE client_key = ?').bind(clientKey).run()
+  await c.env.DB.prepare('DELETE FROM admin_sessions WHERE expires_at <= ?').bind(Date.now()).run()
   setCookie(c, 'session', await createSessionToken(c.env), {
     httpOnly: true,
     secure: new URL(c.req.url).protocol === 'https:',
@@ -218,7 +231,16 @@ app.post('/api/login', async (c) => {
   })
   return c.json({ ok: true })
 })
-app.post('/api/logout', (c) => {
+app.post('/api/logout', async (c) => {
+  const token = getCookie(c, 'session')
+  if (token) {
+    try {
+      const encoded = token.slice(0, token.lastIndexOf('.')).replace(/-/g, '+').replace(/_/g, '/')
+      const payload = atob(encoded.padEnd(Math.ceil(encoded.length / 4) * 4, '='))
+      const sessionId = payload.split('.')[1]
+      if (sessionId) await c.env.DB.prepare('DELETE FROM admin_sessions WHERE id = ?').bind(sessionId).run()
+    } catch {}
+  }
   deleteCookie(c, 'session', {
     path: '/',
     secure: new URL(c.req.url).protocol === 'https:',
@@ -644,6 +666,151 @@ app.get('/api/backup', requireAdmin, async (c) => {
   })
 })
 
+const BACKUP_PREFIX = '_backups/'
+const BACKUP_BATCH_SIZE = 20
+const BACKUP_RETENTION = 3
+async function listAllObjects(bucket, prefix = '') {
+  const objects = []
+  let cursor
+  do {
+    const page = await bucket.list({ prefix, cursor })
+    objects.push(...page.objects)
+    cursor = page.truncated ? page.cursor : undefined
+  } while (cursor)
+  return objects
+}
+
+function validBackupId(id) {
+  return /^[0-9TZ-]+$/.test(id || '')
+}
+
+async function readBackupManifest(bucket, id) {
+  if (!validBackupId(id)) return null
+  const stored = await bucket.get(`${BACKUP_PREFIX}${id}/manifest.json`)
+  return stored ? JSON.parse(await stored.text()) : null
+}
+
+async function writeBackupManifest(bucket, manifest) {
+  await bucket.put(`${BACKUP_PREFIX}${manifest.id}/manifest.json`, JSON.stringify(manifest), {
+    httpMetadata: { contentType: 'application/json' },
+  })
+}
+
+async function deleteBackup(bucket, id) {
+  const objects = await listAllObjects(bucket, `${BACKUP_PREFIX}${id}/`)
+  await deleteR2Keys(bucket, objects.map((object) => object.key))
+}
+
+async function rotateBackups(bucket) {
+  const manifests = (await listAllObjects(bucket, BACKUP_PREFIX))
+    .filter((object) => object.key.endsWith('/manifest.json'))
+    .sort((a, b) => b.key.localeCompare(a.key))
+  for (const object of manifests.slice(BACKUP_RETENTION)) {
+    const id = object.key.split('/')[1]
+    if (validBackupId(id)) await deleteBackup(bucket, id)
+  }
+}
+
+// 먼저 DB가 참조하는 원본 키 목록을 고정하고, 실제 복사는 별도 배치 요청으로 진행합니다.
+app.post('/api/backups', requireAdmin, async (c) => {
+  const id = new Date().toISOString().replace(/[:.]/g, '-')
+  const { results } = await c.env.DB.prepare('SELECT key_large, key_thumb FROM photos ORDER BY id').all()
+  const keys = [...new Set(results.flatMap((photo) => [photo.key_large, photo.key_thumb]).filter(Boolean))]
+  const manifest = { id, created_at: new Date().toISOString(), status: 'pending', completed: 0, objects: keys.map((key) => ({ key })) }
+  await writeBackupManifest(c.env.PHOTOS, manifest)
+  return c.json({ id, object_count: keys.length, completed: 0, done: keys.length === 0 })
+})
+
+app.post('/api/backups/:id/run', requireAdmin, async (c) => {
+  const manifest = await readBackupManifest(c.env.PHOTOS, c.req.param('id'))
+  if (!manifest) return c.json({ error: 'backup not found' }, 404)
+  if (manifest.status === 'complete') return c.json({ id: manifest.id, object_count: manifest.objects.length, completed: manifest.completed, done: true })
+  manifest.status = 'running'
+  const end = Math.min(manifest.completed + BACKUP_BATCH_SIZE, manifest.objects.length)
+  for (let index = manifest.completed; index < end; index++) {
+    const entry = manifest.objects[index]
+    const source = await c.env.PHOTOS.get(entry.key)
+    if (!source) {
+      entry.missing = true
+      manifest.completed = index + 1
+      continue
+    }
+    entry.backup_key = `${BACKUP_PREFIX}${manifest.id}/objects/${entry.key}`
+    entry.size = source.size
+    entry.etag = source.etag
+    await c.env.PHOTOS.put(entry.backup_key, source.body, { httpMetadata: source.httpMetadata, customMetadata: source.customMetadata })
+    manifest.completed = index + 1
+  }
+  const done = manifest.completed >= manifest.objects.length
+  if (done) {
+    manifest.status = 'complete'
+    manifest.completed_at = new Date().toISOString()
+  }
+  await writeBackupManifest(c.env.PHOTOS, manifest)
+  if (done) await rotateBackups(c.env.PHOTOS)
+  return c.json({ id: manifest.id, object_count: manifest.objects.length, completed: manifest.completed, done })
+})
+
+app.get('/api/backups', requireAdmin, async (c) => {
+  const manifests = (await listAllObjects(c.env.PHOTOS, BACKUP_PREFIX))
+    .filter((object) => object.key.endsWith('/manifest.json'))
+    .sort((a, b) => b.key.localeCompare(a.key))
+  const backups = []
+  for (const object of manifests) {
+    const stored = await c.env.PHOTOS.get(object.key)
+    if (stored) backups.push(JSON.parse(await stored.text()))
+  }
+  return c.json(backups.map(({ id, created_at, status, completed = 0, objects }) => ({
+    id, created_at, status, completed, object_count: objects.length,
+  })))
+})
+
+app.post('/api/backups/:id/restore', requireAdmin, async (c) => {
+  const manifest = await readBackupManifest(c.env.PHOTOS, c.req.param('id'))
+  if (!manifest) return c.json({ error: 'backup not found' }, 404)
+  if (manifest.status !== 'complete') return c.json({ error: 'backup is not complete' }, 409)
+  const body = await c.req.json().catch(() => ({}))
+  const offset = Math.max(0, Number.parseInt(body.offset || '0', 10) || 0)
+  const entries = (manifest.objects || []).slice(offset, offset + BACKUP_BATCH_SIZE)
+  let restored = 0
+  for (const entry of entries) {
+    if (!entry.backup_key) continue
+    const source = await c.env.PHOTOS.get(entry.backup_key)
+    if (!source) return c.json({ error: `backup object missing: ${entry.key}` }, 409)
+    await c.env.PHOTOS.put(entry.key, source.body, { httpMetadata: source.httpMetadata, customMetadata: source.customMetadata })
+    restored++
+  }
+  const nextOffset = offset + entries.length
+  return c.json({ restored, next_offset: nextOffset, done: nextOffset >= manifest.objects.length })
+})
+
+app.delete('/api/backups/:id', requireAdmin, async (c) => {
+  const id = c.req.param('id')
+  if (!validBackupId(id)) return c.json({ error: 'invalid backup id' }, 400)
+  if (!(await c.env.PHOTOS.head(`${BACKUP_PREFIX}${id}/manifest.json`))) return c.json({ error: 'backup not found' }, 404)
+  await deleteBackup(c.env.PHOTOS, id)
+  return c.json({ ok: true })
+})
+
+async function removeKeysFromBackups(bucket, keys) {
+  const targets = new Set(keys)
+  if (!targets.size) return 0
+  const manifests = (await listAllObjects(bucket, BACKUP_PREFIX)).filter((object) => object.key.endsWith('/manifest.json'))
+  let removed = 0
+  for (const object of manifests) {
+    const stored = await bucket.get(object.key)
+    if (!stored) continue
+    const manifest = JSON.parse(await stored.text())
+    const matched = manifest.objects.filter((entry) => targets.has(entry.key))
+    await deleteR2Keys(bucket, matched.map((entry) => entry.backup_key).filter(Boolean))
+    manifest.objects = manifest.objects.filter((entry) => !targets.has(entry.key))
+    manifest.completed = Math.min(manifest.completed || 0, manifest.objects.length)
+    await writeBackupManifest(bucket, manifest)
+    removed += matched.length
+  }
+  return removed
+}
+
 app.get('/api/trash', requireAdmin, async (c) => {
   const [{ results: collections }, { results: photos }] = await c.env.DB.batch([
     c.env.DB.prepare(
@@ -702,7 +869,9 @@ app.delete('/api/trash/collections/:id', requireAdmin, async (c) => {
   const { results: photos } = await c.env.DB.prepare(
     'SELECT key_large, key_thumb FROM photos WHERE collection_id = ?'
   ).bind(id).all()
-  await deleteR2Keys(c.env.PHOTOS, photos.flatMap((p) => [p.key_large, p.key_thumb]))
+  const keys = photos.flatMap((p) => [p.key_large, p.key_thumb])
+  await deleteR2Keys(c.env.PHOTOS, keys)
+  if (c.req.query('purge_backups') === '1') await removeKeysFromBackups(c.env.PHOTOS, keys)
   await c.env.DB.batch([
     c.env.DB.prepare('DELETE FROM photos WHERE collection_id = ?').bind(id),
     c.env.DB.prepare('DELETE FROM groups WHERE collection_id = ?').bind(id),
@@ -719,6 +888,9 @@ app.delete('/api/trash/photos/:id', requireAdmin, async (c) => {
   await c.env.DB.prepare('UPDATE photos SET purge_started_at = COALESCE(purge_started_at, ?) WHERE id = ?')
     .bind(new Date().toISOString(), id).run()
   await deleteR2Keys(c.env.PHOTOS, [photo.key_large, photo.key_thumb])
+  if (c.req.query('purge_backups') === '1') {
+    await removeKeysFromBackups(c.env.PHOTOS, [photo.key_large, photo.key_thumb])
+  }
   await c.env.DB.prepare('DELETE FROM photos WHERE id = ?').bind(id).run()
   return c.json({ ok: true })
 })
@@ -844,6 +1016,17 @@ app.post('/api/collections/:id/photos', requireAdmin, async (c) => {
   if (!allowedTypes.has(large.type) || !allowedTypes.has(thumb.type)) {
     return c.json({ error: 'only JPEG and WebP images are allowed' }, 415)
   }
+  if (large.size > 16 * 1024 * 1024 || thumb.size > 2 * 1024 * 1024) {
+    return c.json({ error: 'image file is too large' }, 413)
+  }
+  const hasImageSignature = async (file) => {
+    const bytes = new Uint8Array(await file.slice(0, 12).arrayBuffer())
+    if (file.type === 'image/jpeg') return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
+    return bytes.length >= 12 && String.fromCharCode(...bytes.slice(0, 4)) === 'RIFF' && String.fromCharCode(...bytes.slice(8, 12)) === 'WEBP'
+  }
+  if (!(await hasImageSignature(large)) || !(await hasImageSignature(thumb))) {
+    return c.json({ error: 'image content does not match its file type' }, 415)
+  }
 
   const width = parseInt(form.get('width') || '0', 10)
   const height = parseInt(form.get('height') || '0', 10)
@@ -959,8 +1142,14 @@ app.get('/api/fetch-image', requireAdmin, async (c) => {
   if (host !== 'pbs.twimg.com') return c.text('host not allowed', 403)
   const res = await fetch(url, { headers: { 'User-Agent': 'pht-pp/1.0' } })
   if (!res.ok) return c.text('fetch failed', 502)
-  return new Response(res.body, {
-    headers: { 'Content-Type': res.headers.get('Content-Type') || 'image/jpeg' },
+  const type = (res.headers.get('Content-Type') || '').split(';')[0].toLowerCase()
+  if (!['image/jpeg', 'image/webp'].includes(type)) return c.text('unsupported image type', 415)
+  const length = Number(res.headers.get('Content-Length') || 0)
+  if (length > 20 * 1024 * 1024) return c.text('image is too large', 413)
+  const body = await res.arrayBuffer()
+  if (body.byteLength > 20 * 1024 * 1024) return c.text('image is too large', 413)
+  return new Response(body, {
+    headers: { 'Content-Type': type, 'Content-Length': String(body.byteLength), 'Cache-Control': 'no-store' },
   })
 })
 
@@ -1052,12 +1241,20 @@ app.get('/', async (c) => {
 // ---------- image serving (R2) ----------
 app.get('/img/*', async (c) => {
   const key = c.req.path.slice('/img/'.length)
+  const photo = await c.env.DB.prepare(
+    `SELECT p.id, p.deleted_at, col.published, col.deleted_at AS collection_deleted_at
+     FROM photos p JOIN collections col ON col.id = p.collection_id
+     WHERE p.key_large = ? OR p.key_thumb = ? LIMIT 1`
+  ).bind(key, key).first()
+  if (!photo) return c.text('not found', 404)
+  const admin = await isAdmin(c)
+  if (!admin && (photo.deleted_at || photo.collection_deleted_at || photo.published !== 1)) return c.text('not found', 404)
   const obj = await c.env.PHOTOS.get(key)
   if (!obj) return c.text('not found', 404)
   return new Response(obj.body, {
     headers: {
       'Content-Type': obj.httpMetadata?.contentType || 'image/webp',
-      'Cache-Control': 'public, max-age=31536000, immutable',
+      'Cache-Control': admin ? 'private, no-store' : 'public, max-age=300, must-revalidate',
       ETag: obj.httpEtag,
     },
   })

@@ -35,6 +35,39 @@ async function downloadBackup() {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000)
 }
 
+async function createPhotoBackup() {
+  let result = await api('/backups', { method: 'POST' })
+  while (!result.done) result = await api(`/backups/${result.id}/run`, { method: 'POST' })
+  return result
+}
+
+async function restorePhotoBackup() {
+  const backups = await api('/backups')
+  if (!backups.length) throw new Error('복원할 원본 스냅샷이 없습니다')
+  const latest = backups.find((backup) => backup.status === 'complete')
+  if (!latest) throw new Error('완료된 원본 스냅샷이 없습니다')
+  if (!confirm(`${latest.created_at} 스냅샷의 사진 ${latest.object_count}개를 원래 위치로 복원할까요?`)) return null
+  let offset = 0
+  let total = 0
+  while (true) {
+    const result = await api(`/backups/${latest.id}/restore`, { method: 'POST', json: { offset } })
+    total += result.restored
+    if (result.done) return { restored: total }
+    offset = result.next_offset
+  }
+}
+
+async function deletePhotoBackup() {
+  const backups = await api('/backups')
+  if (!backups.length) throw new Error('삭제할 스냅샷이 없습니다')
+  const choices = backups.map((backup, index) => `${index + 1}. ${backup.created_at} · ${backup.object_count}개 · ${backup.status}`).join('\n')
+  const selected = Number(prompt(`삭제할 스냅샷 번호를 입력하세요.\n\n${choices}`))
+  if (!Number.isInteger(selected) || selected < 1 || selected > backups.length) return null
+  const target = backups[selected - 1]
+  if (!confirm(`${target.created_at} 스냅샷을 삭제할까요?`)) return null
+  return api(`/backups/${target.id}`, { method: 'DELETE' })
+}
+
 // ---------- login ----------
 async function boot() {
   const { admin } = await api('/me')
@@ -70,7 +103,10 @@ async function renderCollections() {
     <div class="topbar">
       <h2>컬렉션 관리</h2>
       <div class="r">
-        <button id="backupBtn">백업(JSON)</button>
+        <button id="backupBtn">메타데이터 백업</button>
+        <button id="photoBackupBtn">사진 원본 백업</button>
+        <button id="photoRestoreBtn">최근 원본 복원</button>
+        <button id="photoBackupDeleteBtn">스냅샷 삭제</button>
         <button id="trashBtn">휴지통</button>
         <button id="gridBtnMain">그리드 이미지</button>
         <button id="modelMgrBtn">모델 관리</button>
@@ -120,6 +156,31 @@ async function renderCollections() {
 
   document.getElementById('backupBtn').addEventListener('click', async () => {
     try { await downloadBackup() } catch (e) { alert('백업 다운로드 실패: ' + e.message) }
+  })
+  document.getElementById('photoBackupBtn').addEventListener('click', async () => {
+    if (!confirm('현재 R2 사진 원본을 스냅샷으로 백업할까요? 사진 수에 따라 시간이 걸릴 수 있습니다.')) return
+    const button = document.getElementById('photoBackupBtn')
+    button.disabled = true
+    try {
+      const result = await createPhotoBackup()
+      alert(`사진 원본 ${result.object_count}개를 백업했습니다.`)
+    } catch (e) { alert('사진 원본 백업 실패: ' + e.message) }
+    finally { button.disabled = false }
+  })
+  document.getElementById('photoRestoreBtn').addEventListener('click', async () => {
+    const button = document.getElementById('photoRestoreBtn')
+    button.disabled = true
+    try {
+      const result = await restorePhotoBackup()
+      if (result) alert(`사진 원본 ${result.restored}개를 복원했습니다.`)
+    } catch (e) { alert('사진 원본 복원 실패: ' + e.message) }
+    finally { button.disabled = false }
+  })
+  document.getElementById('photoBackupDeleteBtn').addEventListener('click', async () => {
+    try {
+      const result = await deletePhotoBackup()
+      if (result) alert('스냅샷을 삭제했습니다.')
+    } catch (e) { alert('스냅샷 삭제 실패: ' + e.message) }
   })
   document.getElementById('trashBtn').addEventListener('click', openTrash)
   document.getElementById('gridBtnMain').addEventListener('click', openGridMaker)
@@ -185,14 +246,14 @@ async function openTrash() {
       ${collections.map((c) => `
         <div class="trash-item" data-type="collections" data-id="${c.id}">
           <div class="t"><div class="title">${esc(c.title)}</div><div class="info">${esc(c.deleted_at || '')}</div></div>
-          <button class="trashRestore">복구</button><button class="trashDelete danger">영구 삭제</button>
+          <button class="trashRestore">복구</button><button class="trashDelete danger">영구 삭제</button><button class="trashErase danger">백업까지 완전 삭제</button>
         </div>`).join('') || '<p class="muted">삭제된 컬렉션이 없습니다.</p>'}
       <h3 style="margin-top:28px">삭제된 사진 <span class="muted">${photos.length}장</span></h3>
       ${photos.map((p) => `
         <div class="trash-item" data-type="photos" data-id="${p.id}">
           ${p.key_thumb ? `<img src="/img/${esc(p.key_thumb)}" />` : ''}
           <div class="t"><div class="title">${esc(p.filename || p.collection_title || `사진 #${p.id}`)}</div><div class="info">${esc(p.deleted_at || '')}</div></div>
-          <button class="trashRestore">복구</button><button class="trashDelete danger">영구 삭제</button>
+          <button class="trashRestore">복구</button><button class="trashDelete danger">영구 삭제</button><button class="trashErase danger">백업까지 완전 삭제</button>
         </div>`).join('') || '<p class="muted">삭제된 사진이 없습니다.</p>'}`
 
     body.querySelectorAll('.trashRestore').forEach((button) => button.addEventListener('click', async () => {
@@ -204,6 +265,12 @@ async function openTrash() {
       const item = button.closest('.trash-item')
       if (!confirm('영구 삭제하면 복구할 수 없습니다. 계속할까요?')) return
       await api(`/trash/${item.dataset.type}/${item.dataset.id}`, { method: 'DELETE' })
+      load()
+    }))
+    body.querySelectorAll('.trashErase').forEach((button) => button.addEventListener('click', async () => {
+      const item = button.closest('.trash-item')
+      if (!confirm('운영 원본과 모든 스냅샷 사본을 삭제합니다. 어디에서도 복구할 수 없습니다. 계속할까요?')) return
+      await api(`/trash/${item.dataset.type}/${item.dataset.id}?purge_backups=1`, { method: 'DELETE' })
       load()
     }))
   }

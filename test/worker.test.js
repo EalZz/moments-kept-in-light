@@ -52,6 +52,14 @@ describe('admin authentication', () => {
     })
     expect(forbidden.status).toBe(403)
   })
+
+  it('revokes the server-side session on logout', async () => {
+    const { cookie } = await login()
+    expect((await SELF.fetch('https://example.com/api/me', { headers: { Cookie: cookie } })).status).toBe(200)
+    await SELF.fetch('https://example.com/api/logout', { method: 'POST', headers: { Cookie: cookie } })
+    expect(await (await SELF.fetch('https://example.com/api/me', { headers: { Cookie: cookie } })).json())
+      .toEqual({ admin: false })
+  })
 })
 
 describe('visibility and sharing', () => {
@@ -101,6 +109,24 @@ describe('visibility and sharing', () => {
     expect(features.map((photo) => photo.title)).toEqual(['Published'])
     const models = await (await SELF.fetch('https://example.com/api/models')).json()
     expect(models[0].photo_count).toBe(1)
+  })
+
+  it('blocks direct image access for draft or deleted content but allows admins', async () => {
+    const publishedId = await seedCollection({ title: 'Published', published: 1 })
+    const draftId = await seedCollection({ title: 'Draft', published: 0 })
+    const deletedId = await seedCollection({ title: 'Deleted photo', published: 1 })
+    for (const [collectionId, key, deletedAt] of [[publishedId, 'public', null], [draftId, 'draft', null], [deletedId, 'deleted', new Date().toISOString()]]) {
+      await env.DB.prepare(
+        'INSERT INTO photos (collection_id, key_large, key_thumb, deleted_at) VALUES (?, ?, ?, ?)'
+      ).bind(collectionId, `${key}-large`, `${key}-thumb`, deletedAt).run()
+      await env.PHOTOS.put(`${key}-large`, new Uint8Array([1]), { httpMetadata: { contentType: 'image/webp' } })
+    }
+    expect((await SELF.fetch('https://example.com/img/public-large')).status).toBe(200)
+    expect((await SELF.fetch('https://example.com/img/draft-large')).status).toBe(404)
+    expect((await SELF.fetch('https://example.com/img/deleted-large')).status).toBe(404)
+    const { cookie } = await login()
+    expect((await SELF.fetch('https://example.com/img/draft-large', { headers: { Cookie: cookie } })).status).toBe(200)
+    expect((await SELF.fetch('https://example.com/img/deleted-large', { headers: { Cookie: cookie } })).status).toBe(200)
   })
 })
 
@@ -194,6 +220,62 @@ describe('trash and backup', () => {
     })
     expect(response.status).toBe(409)
   })
+
+  it('snapshots and restores R2 photo originals', async () => {
+    const id = await seedCollection({ title: 'Snapshot' })
+    await env.DB.prepare(
+      `INSERT INTO photos (collection_id, key_large, key_thumb) VALUES (?, 'snap-large', 'snap-thumb')`
+    ).bind(id).run()
+    await env.PHOTOS.put('snap-large', new Uint8Array([1, 2, 3]), { httpMetadata: { contentType: 'image/webp' } })
+    await env.PHOTOS.put('snap-thumb', new Uint8Array([4, 5]), { httpMetadata: { contentType: 'image/webp' } })
+    const { cookie } = await login()
+    const created = await SELF.fetch('https://example.com/api/backups', { method: 'POST', headers: { Cookie: cookie } })
+    expect(created.status).toBe(200)
+    let backup = await created.json()
+    expect(backup.object_count).toBe(2)
+    expect(backup.done).toBe(false)
+    while (!backup.done) {
+      backup = await (await SELF.fetch(`https://example.com/api/backups/${backup.id}/run`, {
+        method: 'POST', headers: { Cookie: cookie },
+      })).json()
+    }
+    await env.PHOTOS.delete(['snap-large', 'snap-thumb'])
+    const restored = await SELF.fetch(`https://example.com/api/backups/${backup.id}/restore`, {
+      method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ offset: 0 }),
+    })
+    expect(restored.status).toBe(200)
+    expect((await restored.json()).restored).toBe(2)
+    expect(await env.PHOTOS.head('snap-large')).not.toBeNull()
+    expect(await env.PHOTOS.head('snap-thumb')).not.toBeNull()
+  })
+
+  it('deletes an individual snapshot and removes backup copies during a complete purge', async () => {
+    const id = await seedCollection({ title: 'Complete purge' })
+    const inserted = await env.DB.prepare(
+      `INSERT INTO photos (collection_id, key_large, key_thumb) VALUES (?, 'erase-large', 'erase-thumb')`
+    ).bind(id).run()
+    await env.PHOTOS.put('erase-large', new Uint8Array([1]))
+    await env.PHOTOS.put('erase-thumb', new Uint8Array([2]))
+    const { cookie } = await login()
+    let backup = await (await SELF.fetch('https://example.com/api/backups', { method: 'POST', headers: { Cookie: cookie } })).json()
+    while (!backup.done) {
+      backup = await (await SELF.fetch(`https://example.com/api/backups/${backup.id}/run`, {
+        method: 'POST', headers: { Cookie: cookie },
+      })).json()
+    }
+    expect(await env.PHOTOS.head(`_backups/${backup.id}/objects/erase-large`)).not.toBeNull()
+    await SELF.fetch(`https://example.com/api/photos/${inserted.meta.last_row_id}`, { method: 'DELETE', headers: { Cookie: cookie } })
+    const purged = await SELF.fetch(`https://example.com/api/trash/photos/${inserted.meta.last_row_id}?purge_backups=1`, {
+      method: 'DELETE', headers: { Cookie: cookie },
+    })
+    expect(purged.status).toBe(200)
+    expect(await env.PHOTOS.head(`_backups/${backup.id}/objects/erase-large`)).toBeNull()
+    const manifest = JSON.parse(await (await env.PHOTOS.get(`_backups/${backup.id}/manifest.json`)).text())
+    expect(manifest.objects).toHaveLength(0)
+    const deleted = await SELF.fetch(`https://example.com/api/backups/${backup.id}`, { method: 'DELETE', headers: { Cookie: cookie } })
+    expect(deleted.status).toBe(200)
+    expect(await env.PHOTOS.head(`_backups/${backup.id}/manifest.json`)).toBeNull()
+  })
 })
 
 describe('uploads', () => {
@@ -201,8 +283,9 @@ describe('uploads', () => {
     const collectionId = await seedCollection({ title: 'Upload', published: 0 })
     const { cookie } = await login()
     const form = new FormData()
-    form.append('large', new File([new Uint8Array([1, 2, 3])], 'large.webp', { type: 'image/webp' }))
-    form.append('thumb', new File([new Uint8Array([4, 5])], 'thumb.webp', { type: 'image/webp' }))
+    const webp = new Uint8Array([82, 73, 70, 70, 0, 0, 0, 0, 87, 69, 66, 80])
+    form.append('large', new File([webp], 'large.webp', { type: 'image/webp' }))
+    form.append('thumb', new File([webp], 'thumb.webp', { type: 'image/webp' }))
     form.append('width', '100')
     form.append('height', '80')
     const response = await SELF.fetch(`https://example.com/api/collections/${collectionId}/photos`, {
@@ -219,8 +302,9 @@ describe('uploads', () => {
     const collectionId = await seedCollection({ title: 'Bad EXIF', published: 0 })
     const { cookie } = await login()
     const form = new FormData()
-    form.append('large', new File([new Uint8Array([1])], 'large.webp', { type: 'image/webp' }))
-    form.append('thumb', new File([new Uint8Array([2])], 'thumb.webp', { type: 'image/webp' }))
+    const webp = new Uint8Array([82, 73, 70, 70, 0, 0, 0, 0, 87, 69, 66, 80])
+    form.append('large', new File([webp], 'large.webp', { type: 'image/webp' }))
+    form.append('thumb', new File([webp], 'thumb.webp', { type: 'image/webp' }))
     form.append('width', '100')
     form.append('height', '80')
     form.append('exif', '{bad json')
@@ -228,6 +312,21 @@ describe('uploads', () => {
       method: 'POST', headers: { Cookie: cookie }, body: form,
     })
     expect(response.status).toBe(400)
+    expect((await env.PHOTOS.list()).objects).toHaveLength(0)
+  })
+
+  it('rejects files whose bytes do not match the declared image type', async () => {
+    const collectionId = await seedCollection({ title: 'Fake image', published: 0 })
+    const { cookie } = await login()
+    const form = new FormData()
+    form.append('large', new File([new Uint8Array([1, 2, 3])], 'fake.webp', { type: 'image/webp' }))
+    form.append('thumb', new File([new Uint8Array([1, 2, 3])], 'fake.webp', { type: 'image/webp' }))
+    form.append('width', '100')
+    form.append('height', '80')
+    const response = await SELF.fetch(`https://example.com/api/collections/${collectionId}/photos`, {
+      method: 'POST', headers: { Cookie: cookie }, body: form,
+    })
+    expect(response.status).toBe(415)
     expect((await env.PHOTOS.list()).objects).toHaveLength(0)
   })
 
