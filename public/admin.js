@@ -22,6 +22,31 @@ async function api(path, opts = {}) {
   return res.json()
 }
 
+let teardownAdminMenu = null // 이전 렌더의 document 리스너 해제 (페이지 이동 시 누적 방지)
+function setupAdminMenu() {
+  teardownAdminMenu?.()
+  teardownAdminMenu = null
+  const menu = document.querySelector('.admin-menu')
+  if (!menu) return
+  const toggle = menu.querySelector('.admin-menu-toggle')
+  const popup = menu.querySelector('.admin-menu-popup')
+  const close = () => { popup.hidden = true; toggle.setAttribute('aria-expanded', 'false') }
+  toggle.addEventListener('click', (event) => {
+    event.stopPropagation()
+    const open = popup.hidden
+    popup.hidden = !open
+    toggle.setAttribute('aria-expanded', open ? 'true' : 'false')
+  })
+  popup.addEventListener('click', () => close())
+  const onEscape = (event) => { if (event.key === 'Escape') close() }
+  document.addEventListener('click', close)
+  document.addEventListener('keydown', onEscape)
+  teardownAdminMenu = () => {
+    document.removeEventListener('click', close)
+    document.removeEventListener('keydown', onEscape)
+  }
+}
+
 async function downloadBackup() {
   const res = await fetch('/api/backup')
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.status)
@@ -102,17 +127,20 @@ async function renderCollections() {
   app.innerHTML = `
     <div class="topbar">
       <h2>컬렉션 관리</h2>
-      <div class="r">
-        <button id="backupBtn">메타데이터 백업</button>
-        <button id="photoBackupBtn">사진 원본 백업</button>
-        <button id="photoRestoreBtn">최근 원본 복원</button>
-        <button id="photoBackupDeleteBtn">스냅샷 삭제</button>
-        <button id="trashBtn">휴지통</button>
-        <button id="gridBtnMain">그리드 이미지</button>
-        <button id="modelMgrBtn">모델 관리</button>
-        <button id="aboutBtn">About 편집</button>
-        <button onclick="location.href='/'">갤러리 보기</button>
-        <button id="logoutBtn">로그아웃</button>
+      <div class="r admin-menu">
+        <button class="admin-menu-toggle" aria-expanded="false" aria-haspopup="menu">관리 메뉴 ⋯</button>
+        <div class="admin-menu-popup" role="menu" hidden>
+          <button id="backupBtn">메타데이터 백업</button>
+          <button id="photoBackupBtn">사진 원본 백업</button>
+          <button id="photoRestoreBtn">최근 원본 복원</button>
+          <button id="photoBackupDeleteBtn">스냅샷 삭제</button>
+          <button id="trashBtn">휴지통</button>
+          <button id="gridBtnMain">그리드 이미지</button>
+          <button id="modelMgrBtn">모델 관리</button>
+          <button id="aboutBtn">About 편집</button>
+          <button id="galleryBtn">갤러리 보기</button>
+          <button id="logoutBtn">로그아웃</button>
+        </div>
       </div>
     </div>
     <div class="panel">
@@ -154,6 +182,7 @@ async function renderCollections() {
       </div>
     </div>`
 
+  setupAdminMenu()
   document.getElementById('backupBtn').addEventListener('click', async () => {
     try { await downloadBackup() } catch (e) { alert('백업 다운로드 실패: ' + e.message) }
   })
@@ -186,6 +215,7 @@ async function renderCollections() {
   document.getElementById('gridBtnMain').addEventListener('click', openGridMaker)
   document.getElementById('modelMgrBtn').addEventListener('click', openModelManager)
   document.getElementById('aboutBtn').addEventListener('click', openAboutEditor)
+  document.getElementById('galleryBtn').addEventListener('click', () => { location.href = '/' })
   document.getElementById('logoutBtn').addEventListener('click', async () => {
     await api('/logout', { method: 'POST' }); boot()
   })
@@ -319,6 +349,48 @@ function sectionHtml(col, group, photos) {
     </div>`
 }
 
+function openCollectionEditor(col) {
+  const overlay = document.createElement('div')
+  overlay.className = 'grid-maker'
+  overlay.innerHTML = `
+    <div class="inner" style="max-width:680px">
+      <div class="gm-top"><h3>컬렉션 정보 수정</h3><button id="editColClose">닫기</button></div>
+      <div class="panel">
+        <div class="row"><input id="editColTitle" value="${esc(col.title)}" placeholder="제목" /></div>
+        <div class="row"><input id="editColDate" value="${esc(col.date || '')}" placeholder="날짜 (예: 2026-05)" /></div>
+        <div class="row"><textarea id="editColDesc" placeholder="설명 (선택)">${esc(col.description || '')}</textarea></div>
+        <button class="primary" id="editColSave">저장</button>
+      </div>
+    </div>`
+  document.body.appendChild(overlay)
+  document.body.style.overflow = 'hidden'
+  const close = () => { document.body.style.overflow = ''; overlay.remove() }
+  overlay.querySelector('#editColClose').addEventListener('click', close)
+  overlay.addEventListener('click', (event) => { if (event.target === overlay) close() })
+  overlay.querySelector('#editColSave').addEventListener('click', async () => {
+    const title = overlay.querySelector('#editColTitle').value.trim()
+    if (!title) return alert('제목을 입력하세요')
+    const button = overlay.querySelector('#editColSave')
+    button.disabled = true
+    try {
+      await api(`/collections/${col.id}`, {
+        method: 'PATCH',
+        json: {
+          title,
+          date: overlay.querySelector('#editColDate').value.trim(),
+          description: overlay.querySelector('#editColDesc').value.trim(),
+        },
+      })
+      close()
+      renderCollection(col.id)
+    } catch (error) {
+      alert('컬렉션 정보 저장 실패: ' + error.message)
+      button.disabled = false
+    }
+  })
+  overlay.querySelector('#editColTitle').focus()
+}
+
 async function renderCollection(id) {
   const [col, settings] = await Promise.all([api('/collections/' + id), api('/settings')])
   const groups = col.groups || []
@@ -330,11 +402,17 @@ async function renderCollection(id) {
       <h2>${esc(col.title)} <span class="muted">${esc(col.date)}${isFeatured ? ' · 메인에 걸림' : ''}</span></h2>
       <div class="r">
         <button id="backBtn">← 목록</button>
-        <button id="publishBtn">${col.published === 0 ? '공개하기' : '비공개로 전환'}</button>
-        <button id="featureBtn">${isFeatured ? '메인 해제' : '메인에 걸기'}</button>
-        <button id="newGrpBtn">+ 사람 폴더</button>
-        <button id="gridBtn">그리드 이미지</button>
-        <button class="danger" id="delColBtn">컬렉션 삭제</button>
+        <div class="admin-menu">
+          <button class="admin-menu-toggle" aria-expanded="false" aria-haspopup="menu">컬렉션 메뉴 ⋯</button>
+          <div class="admin-menu-popup" role="menu" hidden>
+            <button id="editColBtn">정보 수정</button>
+            <button id="publishBtn">${col.published === 0 ? '공개하기' : '비공개로 전환'}</button>
+            <button id="featureBtn">${isFeatured ? '메인 해제' : '메인에 걸기'}</button>
+            <button id="newGrpBtn">+ 사람 폴더</button>
+            <button id="gridBtn">그리드 이미지</button>
+            <button class="danger" id="delColBtn">컬렉션 삭제</button>
+          </div>
+        </div>
       </div>
     </div>
     <div id="bulkbar" class="bulkbar" hidden>
@@ -348,7 +426,9 @@ async function renderCollection(id) {
     ${sectionHtml(col, null, ungrouped)}
     ${groups.map((g) => sectionHtml(col, g, col.photos.filter((p) => p.group_id === g.id))).join('')}`
 
+  setupAdminMenu()
   document.getElementById('backBtn').addEventListener('click', renderCollections)
+  document.getElementById('editColBtn').addEventListener('click', () => openCollectionEditor(col))
   document.getElementById('publishBtn').addEventListener('click', async () => {
     const published = col.published === 0 ? 1 : 0
     await api('/collections/' + id, { method: 'PATCH', json: { published } })

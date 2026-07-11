@@ -128,6 +128,40 @@ describe('visibility and sharing', () => {
     expect((await SELF.fetch('https://example.com/img/draft-large', { headers: { Cookie: cookie } })).status).toBe(200)
     expect((await SELF.fetch('https://example.com/img/deleted-large', { headers: { Cookie: cookie } })).status).toBe(200)
   })
+
+  it('includes model display names in feature, photo, and collection responses', async () => {
+    const collectionId = await seedCollection({ title: 'Credits', published: 1 })
+    const group = await env.DB.prepare(
+      `INSERT INTO groups (collection_id, name, meta_json) VALUES (?, 'Folder Name', '{"twitter":["model_id"]}')`
+    ).bind(collectionId).run()
+    await env.DB.prepare("INSERT INTO model_names (handle, name) VALUES ('model_id', 'Model Name')").run()
+    await env.DB.prepare(
+      `INSERT INTO photos (collection_id, group_id, key_large, key_thumb) VALUES (?, ?, 'credit-large', 'credit-thumb')`
+    ).bind(collectionId, group.meta.last_row_id).run()
+
+    const features = await (await SELF.fetch('https://example.com/api/feature-photos')).json()
+    expect(features[0].models).toEqual(['model_id'])
+    expect(features[0].model_names).toEqual(['Model Name'])
+    const photos = await (await SELF.fetch('https://example.com/api/photos')).json()
+    expect(photos.photos[0].model_names).toEqual(['Model Name'])
+    const collection = await (await SELF.fetch(`https://example.com/api/collections/${collectionId}`)).json()
+    expect(collection.groups[0].model_names).toEqual(['Model Name'])
+  })
+})
+
+describe('collection editing', () => {
+  it('updates title, date, and description for an active collection', async () => {
+    const id = await seedCollection({ title: 'Before', published: 0 })
+    const { cookie } = await login()
+    const response = await SELF.fetch(`https://example.com/api/collections/${id}`, {
+      method: 'PATCH',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'After', date: '2026-07', description: 'Updated' }),
+    })
+    expect(response.status).toBe(200)
+    const row = await env.DB.prepare('SELECT title, date, description FROM collections WHERE id = ?').bind(id).first()
+    expect(row).toEqual({ title: 'After', date: '2026-07', description: 'Updated' })
+  })
 })
 
 describe('trash and backup', () => {

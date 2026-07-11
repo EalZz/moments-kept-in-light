@@ -253,6 +253,12 @@ app.get('/api/collections/:id', async (c) => {
     'SELECT * FROM groups WHERE collection_id = ? ORDER BY (sort_order IS NULL), sort_order, id'
   ).bind(id).all()
   for (const g of groups) g.meta = parseJsonObject(g.meta_json)
+  const { results: modelNameRows } = await c.env.DB.prepare('SELECT handle, name FROM model_names').all()
+  const modelNames = Object.fromEntries(modelNameRows.map((row) => [row.handle.toLowerCase(), row.name]))
+  for (const g of groups) {
+    const handles = [].concat(g.meta.twitter || [])
+    g.model_names = handles.map((handle) => modelNames[handle.toLowerCase()] || (handles.length === 1 ? g.name : ''))
+  }
   return c.json({ ...col, photos, groups })
 })
 
@@ -451,7 +457,7 @@ app.get('/api/photos', async (c) => {
   const offset = Math.max(0, +(c.req.query('offset') || 0) || 0)
   const { results } = await c.env.DB.prepare(
     `SELECT p.key_thumb, p.key_large, p.width, p.height, p.collection_id,
-            col.title, g.meta_json AS g_meta
+            col.title, g.name AS group_name, g.meta_json AS g_meta
      FROM photos p
      JOIN collections col ON col.id = p.collection_id
      LEFT JOIN groups g ON g.id = p.group_id
@@ -464,10 +470,13 @@ app.get('/api/photos', async (c) => {
     `SELECT COUNT(*) AS n FROM photos p JOIN collections col ON col.id = p.collection_id
      WHERE p.deleted_at IS NULL AND col.deleted_at IS NULL${includeDrafts ? '' : ' AND col.published = 1'}`
   ).first()
+  const { results: modelNameRows } = await c.env.DB.prepare('SELECT handle, name FROM model_names').all()
+  const modelNames = Object.fromEntries(modelNameRows.map((row) => [row.handle.toLowerCase(), row.name]))
   return c.json({
     total: totalRow.n,
     photos: results.map((r) => {
       const meta = parseJsonObject(r.g_meta)
+      const handles = [].concat(meta.twitter || [])
       return {
         key_thumb: r.key_thumb,
         key_large: r.key_large,
@@ -475,7 +484,8 @@ app.get('/api/photos', async (c) => {
         height: r.height,
         collection_id: r.collection_id,
         title: r.title,
-        models: [].concat(meta.twitter || []),
+        models: handles,
+        model_names: handles.map((handle) => modelNames[handle.toLowerCase()] || (handles.length === 1 ? r.group_name : '')),
         character: meta.character || '',
       }
     }),
@@ -486,20 +496,24 @@ app.get('/api/photos', async (c) => {
 app.get('/api/feature-photos', async (c) => {
   const includeDrafts = await isAdmin(c)
   const { results } = await c.env.DB.prepare(
-    `SELECT p.key_large, p.collection_id, p.group_id, col.title, g.meta_json AS g_meta
+    `SELECT p.key_large, p.collection_id, p.group_id, col.title, g.name AS group_name, g.meta_json AS g_meta
      FROM photos p
      JOIN collections col ON col.id = p.collection_id
      LEFT JOIN groups g ON g.id = p.group_id
      WHERE p.deleted_at IS NULL AND col.deleted_at IS NULL${includeDrafts ? '' : ' AND col.published = 1'}`
   ).all()
+  const { results: modelNameRows } = await c.env.DB.prepare('SELECT handle, name FROM model_names').all()
+  const modelNames = Object.fromEntries(modelNameRows.map((row) => [row.handle.toLowerCase(), row.name]))
   return c.json(results.map((r) => {
     const meta = parseJsonObject(r.g_meta)
+    const handles = [].concat(meta.twitter || [])
     return {
       key_large: r.key_large,
       collection_id: r.collection_id,
       group_id: r.group_id,
       title: r.title,
-      models: [].concat(meta.twitter || []),
+      models: handles,
+      model_names: handles.map((handle) => modelNames[handle.toLowerCase()] || (handles.length === 1 ? r.group_name : '')),
       character: meta.character || '',
     }
   }))

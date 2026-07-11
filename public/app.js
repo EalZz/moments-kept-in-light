@@ -190,6 +190,13 @@ function featureHref(p) {
   return '#/c/' + p.collection_id + (p.group_id ? '/g' + p.group_id : '')
 }
 
+function modelCreditText(p) {
+  return (p.models || []).map((handle, index) => {
+    const name = (p.model_names || [])[index]
+    return [name, '@' + handle].filter(Boolean).join(' ')
+  }).join(' · ')
+}
+
 // 랜덤 모드: 전체 사진 셔플 순환, 한 바퀴 돌기 전엔 반복 없음. 캡션은 행사명 + 모델(+캐릭터)
 // 스와이프/드래그로 수동 넘기기 가능, 캡션은 페이드 전환
 function startRandomFeature(deck) {
@@ -211,7 +218,7 @@ function startRandomFeature(deck) {
     info.classList.add('swap') // 페이드아웃
     setTimeout(() => {
       link.querySelector('.name').textContent = p.title
-      link.querySelector('.models').textContent = p.models.length ? p.models.map((h) => '@' + h).join(' · ') : ''
+      link.querySelector('.models').textContent = modelCreditText(p)
       link.querySelector('.character').textContent = p.character || ''
       info.classList.remove('swap') // 페이드인
     }, 420)
@@ -404,7 +411,7 @@ async function renderHome() {
       <div class="feature-info">
         <div class="label">Gallery</div>
         <div class="name">${esc(p.title)}</div>
-        <div class="date models">${p.models.length ? p.models.map((h) => '@' + esc(h)).join(' · ') : ''}</div>
+        <div class="date models">${esc(modelCreditText(p))}</div>
         <div class="character">${esc(p.character || '')}</div>
       </div>
     </a>`
@@ -498,9 +505,11 @@ async function renderCollection(id, focusGroup = null) {
   // 폴더에 모델 계정이 있으면 사진에 크레딧 부착 (라이트박스 표시용, 여러 명 가능)
   for (const s of sections) {
     s.handles = [].concat((s.meta && s.meta.twitter) || []) // 옛 문자열 형식도 배열로
+    s.modelNames = [].concat(s.model_names || [])
     s.character = (s.meta && s.meta.character) || ''
     s.photos.forEach((p) => {
       if (s.handles.length) p._models = s.handles
+      if (s.modelNames.length) p._modelNames = s.modelNames
       if (s.character) p._character = s.character
     })
   }
@@ -634,9 +643,11 @@ function openLightbox(i) {
     const p = current.photos[current.index]
     const exifEl = box.querySelector('.exif')
     exifEl.textContent = [p._event, exifLine(p)].filter(Boolean).join(' · ')
-    for (const handle of p._models || []) {
+    for (const [index, handle] of (p._models || []).entries()) {
       // 모델(코스어) 크레딧 링크 (여러 명 가능)
       if (exifEl.textContent || exifEl.querySelector('a')) exifEl.appendChild(document.createTextNode(' · '))
+      const modelName = (p._modelNames || [])[index]
+      if (modelName) exifEl.appendChild(document.createTextNode(modelName + ' '))
       const a = document.createElement('a')
       a.href = 'https://x.com/' + handle
       a.target = '_blank'
@@ -741,6 +752,7 @@ let photosMore = null // { offset, total, loading }
 
 function decoratePhoto(p) {
   if (p.models.length) p._models = p.models
+  if (p.model_names?.length) p._modelNames = p.model_names
   if (p.character) p._character = p.character
   p._event = p.title // 라이트박스에 행사명 표시
   return p
@@ -810,6 +822,8 @@ async function renderModel(handle) {
   for (const s of m.sections) {
     s.photos.forEach((p) => {
       if (s.handles.length) p._models = s.handles
+      // 합동 폴더에서 다른 모델 핸들엔 이 페이지 모델의 이름을 붙이지 않음
+      if (s.handles.length) p._modelNames = s.handles.map((h) => h.toLowerCase() === handle.toLowerCase() ? m.name : '')
       if (s.character) p._character = s.character
     })
   }
