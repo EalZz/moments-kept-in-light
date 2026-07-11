@@ -342,7 +342,7 @@ let homeCollections = null
 function layoutCollections(force) {
   const wrap = document.querySelector('.collections')
   if (!wrap || !homeCollections) return
-  const n = innerWidth <= 620 ? 1 : innerWidth <= 980 ? 2 : 3
+  const n = innerWidth <= 980 ? 2 : 3
   if (!force && +wrap.dataset.cols === n) return
   wrap.dataset.cols = n
   const heights = Array(n).fill(0)

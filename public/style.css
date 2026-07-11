@@ -480,6 +480,15 @@ main.wrap { padding-top: 76px; }
 }
 .card:hover .meta .title { background-size: 100% 1px; }
 
+@media (max-width: 620px) {
+  .collections { gap: 12px; padding-bottom: 72px; }
+  .collections .mcol { gap: 30px; }
+  .card .strip { gap: 4px; margin-top: 4px; }
+  .card .meta { padding-top: 11px; }
+  .card .meta .info { font-size: 9px; letter-spacing: 0.12em; }
+  .card .meta .title { font-size: 20px; }
+}
+
 /* ---------- collection detail ---------- */
 .col-head { padding: 72px 0 48px; text-align: center; }
 .col-head .back {
