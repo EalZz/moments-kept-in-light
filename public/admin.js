@@ -151,7 +151,10 @@ async function renderCollections() {
       </div>
       ${daily.length ? `
         <div class="view-chart" aria-label="최근 일별 조회수">
-          ${daily.map((d) => `<div class="view-bar" style="height:${Math.max(3, Math.round(d.views / maxViews * 100))}%" title="${esc(d.view_date)} · ${Number(d.views).toLocaleString()}회"></div>`).join('')}
+          ${daily.map((d) => {
+            const label = `${d.view_date} · ${Number(d.views).toLocaleString()}회`
+            return `<button type="button" class="view-bar" style="height:${Math.max(3, Math.round(d.views / maxViews * 100))}%" data-tooltip="${esc(label)}" aria-label="${esc(label)}"></button>`
+          }).join('')}
         </div>
         <div class="view-dates"><span>${esc(firstDate)}</span><span>${esc(lastDate)}</span></div>` : '<p class="muted">아직 집계된 조회수가 없습니다.</p>'}
     </div>

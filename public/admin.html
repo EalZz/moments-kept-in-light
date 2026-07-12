@@ -59,8 +59,23 @@
     .stat-card .label { color: var(--fg-faint); font-size: 11px; letter-spacing: 0.08em; }
     .stat-card .value { margin-top: 7px; font-size: 28px; font-weight: 600; }
     .view-chart { display: flex; align-items: end; gap: 3px; height: 118px; padding-top: 16px; border-bottom: 1px solid var(--border); }
-    .view-bar { position: relative; flex: 1; min-width: 3px; background: var(--fg-dim); border-radius: 2px 2px 0 0; }
-    .view-bar:hover { background: var(--fg); }
+    .view-bar { position: relative; flex: 1; min-width: 3px; padding: 0; border: 0; background: var(--fg-dim); border-radius: 2px 2px 0 0; }
+    .view-bar:hover, .view-bar:focus { background: var(--fg); outline: none; }
+    .view-bar::after {
+      content: attr(data-tooltip);
+      position: absolute; left: 50%; bottom: calc(100% + 8px); z-index: 2;
+      transform: translateX(-50%) translateY(3px);
+      padding: 5px 8px; border: 1px solid var(--border); border-radius: 4px;
+      background: var(--bg); color: var(--fg); box-shadow: 0 8px 24px rgba(0,0,0,.35);
+      font-size: 11px; line-height: 1.2; white-space: nowrap;
+      opacity: 0; visibility: hidden; pointer-events: none;
+      transition: opacity .15s, transform .15s, visibility .15s;
+    }
+    .view-bar:hover::after, .view-bar:focus::after { opacity: 1; visibility: visible; transform: translateX(-50%); }
+    .view-bar:first-child::after { left: 0; transform: translateY(3px); }
+    .view-bar:first-child:hover::after, .view-bar:first-child:focus::after { transform: none; }
+    .view-bar:last-child::after { left: auto; right: 0; transform: translateY(3px); }
+    .view-bar:last-child:hover::after, .view-bar:last-child:focus::after { transform: none; }
     .view-dates { display: flex; justify-content: space-between; margin-top: 7px; color: var(--fg-faint); font-size: 10px; }
     @media (max-width: 520px) { .stats-grid { grid-template-columns: 1fr; } }
     /* ---------- 그리드 이미지 만들기 ---------- */
