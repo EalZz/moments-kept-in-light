@@ -324,8 +324,7 @@ function sectionHtml(col, group, photos) {
         ${group ? `<div class="r">
           <button class="grpUp" title="폴더 위로">▲</button>
           <button class="grpDown" title="폴더 아래로">▼</button>
-          <button class="renameGrp">이름 변경</button>
-          <button class="setCredit">모델/캐릭터</button>
+          <button class="editGrp">폴더 정보</button>
           <button class="delGrp danger">폴더 삭제</button>
         </div>` : ''}
       </div>
@@ -392,6 +391,98 @@ function openCollectionEditor(col) {
     }
   })
   overlay.querySelector('#editColTitle').focus()
+}
+
+function createAdminDialog(title, content) {
+  const overlay = document.createElement('div')
+  overlay.className = 'grid-maker admin-dialog'
+  overlay.innerHTML = `
+    <div class="inner">
+      <div class="gm-top"><h3>${esc(title)}</h3><button type="button" class="dialogClose">닫기</button></div>
+      <div class="panel">${content}</div>
+    </div>`
+  document.body.appendChild(overlay)
+  document.body.style.overflow = 'hidden'
+  const close = () => {
+    document.removeEventListener('keydown', onKey)
+    document.body.style.overflow = ''
+    overlay.remove()
+  }
+  const onKey = (event) => { if (event.key === 'Escape') close() }
+  overlay.querySelector('.dialogClose').addEventListener('click', close)
+  overlay.addEventListener('click', (event) => { if (event.target === overlay) close() })
+  document.addEventListener('keydown', onKey)
+  return { overlay, close }
+}
+
+function openGroupEditor(group, onSaved) {
+  const currentHandles = [].concat((group.meta && group.meta.twitter) || []).join(', ')
+  const currentCharacter = (group.meta && group.meta.character) || ''
+  const { overlay, close } = createAdminDialog('폴더 정보 편집', `
+    <div class="form-field">
+      <label for="groupName">폴더 이름</label>
+      <input id="groupName" value="${esc(group.name)}" placeholder="예: 연희 KANZE님" />
+    </div>
+    <div class="form-field">
+      <label for="creditHandles">모델 X 계정</label>
+      <input id="creditHandles" value="${esc(currentHandles)}" placeholder="예: aaa, bbb" />
+      <div class="field-hint">@ 없이 입력하고, 여러 명이면 쉼표로 구분합니다. 비우면 계정 연결이 삭제됩니다.</div>
+    </div>
+    <div class="form-field">
+      <label for="creditCharacter">캐릭터명</label>
+      <input id="creditCharacter" value="${esc(currentCharacter)}" placeholder="예: 붕괴: 스타레일 - 연희" />
+      <div class="field-hint">비우면 갤러리에 캐릭터명이 표시되지 않습니다.</div>
+    </div>
+    <div class="dialog-actions"><button type="button" class="dialogCancel">취소</button><button type="button" class="primary dialogSave">저장</button></div>`)
+  overlay.querySelector('.dialogCancel').addEventListener('click', close)
+  overlay.querySelector('.dialogSave').addEventListener('click', async () => {
+    const button = overlay.querySelector('.dialogSave')
+    const name = overlay.querySelector('#groupName').value.trim()
+    if (!name) {
+      overlay.querySelector('#groupName').focus()
+      return
+    }
+    button.disabled = true
+    try {
+      await api('/groups/' + group.id, {
+        method: 'PATCH',
+        json: {
+          name,
+          twitter: overlay.querySelector('#creditHandles').value.trim(),
+          character: overlay.querySelector('#creditCharacter').value.trim(),
+        },
+      })
+      close()
+      onSaved()
+    } catch (error) {
+      alert('폴더 정보 저장 실패: ' + error.message)
+      button.disabled = false
+    }
+  })
+  overlay.querySelector('#groupName').focus()
+}
+
+function openMoveDialog(title, groups, onMove) {
+  const options = [{ id: '', name: '행사 바로 아래' }, ...groups.map((group) => ({ id: String(group.id), name: group.name }))]
+  const { overlay, close } = createAdminDialog(title, `
+    <div class="move-options">
+      ${options.map((option, index) => `<label class="move-option"><input type="radio" name="moveTarget" value="${esc(option.id)}" ${index === 0 ? 'checked' : ''} /><span>${esc(option.name)}</span></label>`).join('')}
+    </div>
+    <div class="dialog-actions"><button type="button" class="dialogCancel">취소</button><button type="button" class="primary dialogMove">이동</button></div>`)
+  overlay.querySelector('.dialogCancel').addEventListener('click', close)
+  overlay.querySelector('.dialogMove').addEventListener('click', async () => {
+    const button = overlay.querySelector('.dialogMove')
+    const value = overlay.querySelector('input[name="moveTarget"]:checked').value
+    button.disabled = true
+    try {
+      await onMove(value ? +value : null)
+      close()
+    } catch (error) {
+      alert('사진 이동 실패: ' + error.message)
+      button.disabled = false
+    }
+  })
+  overlay.querySelector('input[name="moveTarget"]').focus()
 }
 
 async function renderCollection(id) {
@@ -501,14 +592,6 @@ async function renderCollection(id) {
       })
     })
 
-    const renameBtn = sec.querySelector('.renameGrp')
-    if (renameBtn) renameBtn.addEventListener('click', async () => {
-      const g = groups.find((x) => x.id === gid)
-      const name = prompt('새 이름', g ? g.name : '')
-      if (!name || !name.trim()) return
-      await api('/groups/' + gid, { method: 'PATCH', json: { name: name.trim() } })
-      renderCollection(id)
-    })
     const delBtn = sec.querySelector('.delGrp')
     if (delBtn) delBtn.addEventListener('click', async () => {
       if (!confirm('폴더를 삭제할까요? 사진은 지워지지 않고 행사 바로 아래로 이동합니다.')) return
@@ -530,17 +613,10 @@ async function renderCollection(id) {
     const downBtn = sec.querySelector('.grpDown')
     if (downBtn) downBtn.addEventListener('click', () => moveGroup(1))
 
-    const creditBtn = sec.querySelector('.setCredit')
-    if (creditBtn) creditBtn.addEventListener('click', async () => {
+    const editBtn = sec.querySelector('.editGrp')
+    if (editBtn) editBtn.addEventListener('click', () => {
       const g = groups.find((x) => x.id === gid)
-      const cur = [].concat((g && g.meta && g.meta.twitter) || []).join(', ')
-      const handle = prompt('① 모델(코스어님) X 핸들 — @ 없이 입력, 여러 명이면 쉼표로 구분, 비우면 삭제\n예: aaa, bbb — 갤러리와 사진 뷰어에 링크로 표시됩니다.', cur)
-      if (handle === null) return
-      const curChr = (g && g.meta && g.meta.character) || ''
-      const character = prompt('② 캐릭터명 — 모델 이름 밑에 작게 표시됩니다. 비우면 표시 안 함\n예: 붕괴: 스타레일 - 연희', curChr)
-      if (character === null) return
-      await api('/groups/' + gid, { method: 'PATCH', json: { twitter: handle.trim(), character: character.trim() } })
-      renderCollection(id)
+      openGroupEditor(g, () => renderCollection(id))
     })
   })
 
@@ -552,15 +628,12 @@ async function renderCollection(id) {
       renderCollection(id)
     }))
   app.querySelectorAll('.movePh').forEach((b) =>
-    b.addEventListener('click', async (e) => {
+    b.addEventListener('click', (e) => {
       const pid = e.target.closest('.admin-ph').dataset.id
-      const choices = ['0. 행사 바로 아래', ...groups.map((g, i) => `${i + 1}. ${g.name}`)]
-      const ans = prompt('어디로 옮길까요?\n' + choices.join('\n'), '0')
-      if (ans === null) return
-      const n = parseInt(ans, 10)
-      if (isNaN(n) || n < 0 || n > groups.length) return alert('번호를 확인해주세요')
-      await api('/photos/' + pid, { method: 'PATCH', json: { group_id: n === 0 ? null : groups[n - 1].id } })
-      renderCollection(id)
+      openMoveDialog('사진 이동', groups, async (groupId) => {
+        await api('/photos/' + pid, { method: 'PATCH', json: { group_id: groupId } })
+        renderCollection(id)
+      })
     }))
   app.querySelectorAll('.delPh').forEach((b) =>
     b.addEventListener('click', async (e) => {
@@ -596,14 +669,10 @@ async function renderCollection(id) {
   })
   document.getElementById('bulkMove').addEventListener('click', async () => {
     if (!sel.size) return
-    const choices = ['0. 행사 바로 아래', ...groups.map((g, i) => `${i + 1}. ${g.name}`)]
-    const ans = prompt(`선택한 ${sel.size}장을 어디로 옮길까요?\n` + choices.join('\n'), '0')
-    if (ans === null) return
-    const n = parseInt(ans, 10)
-    if (isNaN(n) || n < 0 || n > groups.length) return alert('번호를 확인해주세요')
-    const gid = n === 0 ? null : groups[n - 1].id
-    for (const pid of sel) await api('/photos/' + pid, { method: 'PATCH', json: { group_id: gid } })
-    renderCollection(id)
+    openMoveDialog(`선택한 ${sel.size}장 이동`, groups, async (groupId) => {
+      for (const pid of sel) await api('/photos/' + pid, { method: 'PATCH', json: { group_id: groupId } })
+      renderCollection(id)
+    })
   })
 }
 

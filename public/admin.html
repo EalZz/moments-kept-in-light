@@ -108,6 +108,15 @@
     .trash-item .t { flex: 1; min-width: 0; }
     .trash-item .title { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .trash-item .info { color: var(--fg-faint); font-size: 11px; }
+    .admin-dialog .inner { max-width: 560px; }
+    .admin-dialog .form-field { display: grid; gap: 7px; margin-bottom: 16px; }
+    .admin-dialog .form-field label { font-size: 12px; color: var(--fg-dim); }
+    .admin-dialog .field-hint { font-size: 11px; color: var(--fg-faint); line-height: 1.5; }
+    .admin-dialog .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+    .move-options { display: grid; gap: 8px; }
+    .move-option { display: flex; align-items: center; gap: 10px; padding: 11px 12px; border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
+    .move-option:hover { border-color: var(--fg-dim); background: rgba(255,255,255,.025); }
+    .move-option input { width: auto; margin: 0; }
     @media (max-width: 720px) { .topbar { align-items: flex-start; gap: 12px; } .topbar .r { justify-content: flex-end; } }
   </style>
 </head>
