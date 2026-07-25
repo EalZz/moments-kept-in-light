@@ -1,3 +1,45 @@
+/* 디스플레이 서체는 같은 도메인에서 직접 서빙합니다.
+   구글 폰트로 불러오면 트위터 같은 인앱 브라우저에서 요청이 막혀 서체가 통째로 사라졌습니다.
+   (Cormorant Garamond는 가변 폰트라 400~600을 한 파일이 담당합니다) */
+@font-face {
+  font-family: 'Cormorant Garamond';
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url('/fonts/cormorant-garamond-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Cormorant Garamond';
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url('/fonts/cormorant-garamond-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308,
+    U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113,
+    U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Cormorant Garamond';
+  font-style: italic;
+  font-weight: 400 500;
+  font-display: swap;
+  src: url('/fonts/cormorant-garamond-latin-italic.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Cormorant Garamond';
+  font-style: italic;
+  font-weight: 400 500;
+  font-display: swap;
+  src: url('/fonts/cormorant-garamond-latin-ext-italic.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308,
+    U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113,
+    U+2C60-2C7F, U+A720-A7FF;
+}
+
 :root {
   --bg: #0b0b0d;
   --bg-soft: #141417;
@@ -8,7 +50,8 @@
   --hairline: rgba(255, 255, 255, 0.07); /* 사진/배경 분리용 헤어라인 */
   --accent: #b8a98c;                      /* 절제된 웜뉴트럴 악센트 (호버/활성) */
   --radius: 4px;
-  --font-display: "Cormorant Garamond", "Noto Serif KR", serif;
+  /* 한글은 Noto Serif KR을 쓰되, 그것도 못 받으면 기기에 있는 명조계 서체로 내려갑니다 */
+  --font-display: "Cormorant Garamond", "Noto Serif KR", "Nanum Myeongjo", AppleMyungjo, Batang, serif;
 
   /* 글래스 표면 — 내비·모바일 메뉴·검색 패널이 모두 같은 값을 씁니다.
      블러가 실제로 보이도록 배경을 충분히 투명하게 두고(0.62), 그만큼 강하게 흐려

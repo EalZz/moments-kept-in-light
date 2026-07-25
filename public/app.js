@@ -31,15 +31,57 @@ const SITE = window.SITE || {}
 document.title = SITE.name || 'PORTFOLIO'
 document.querySelectorAll('[data-site-name]').forEach((el) => { el.textContent = SITE.name || 'PORTFOLIO' })
 // 내비 링크: 홈의 해당 섹션으로 스크롤 (다른 페이지면 홈으로 이동 후 스크롤)
+// 홈 렌더는 API 응답을 기다리므로 고정 시간 뒤에 스크롤하면 섹션이 아직 없어 최상단에 머물렀습니다.
+// 그래서 목표를 pendingScroll에 적어두고, 라우터가 렌더를 끝낸 뒤 실제로 생길 때까지 기다려 내려갑니다.
+let pendingScroll = null
+function scrollToSectionWhenReady(target, { smooth = true, timeout = 6000 } = {}) {
+  const start = performance.now()
+  const offsetOf = (el) => Math.round(el.getBoundingClientRect().top + window.scrollY)
+  let lastTop = null
+  let steady = 0
+  // 사용자가 직접 스크롤을 시작하면 아래 보정을 포기합니다(끌려가는 느낌을 주지 않게).
+  let userMoved = false
+  const markUser = () => { userMoved = true }
+  const events = ['wheel', 'touchstart', 'keydown']
+  events.forEach((type) => addEventListener(type, markUser, { once: true, passive: true }))
+  const cleanup = () => events.forEach((type) => removeEventListener(type, markUser))
+
+  // requestAnimationFrame이 아니라 타이머로 확인합니다.
+  // 탭이 백그라운드면 rAF는 아예 호출되지 않아서 스크롤이 그냥 안 됩니다.
+  const timer = setInterval(() => {
+    const el = document.querySelector(target)
+    const waited = performance.now() - start
+    if (el) {
+      const top = offsetOf(el)
+      // 표지 배치(메이슨리)가 끝나기 전에 스크롤하면 문서 높이가 바뀌며 애니메이션이 취소됩니다.
+      // 그래서 목표 위치가 몇 번 연속 같게 나온 뒤에 움직입니다.
+      if (top === lastTop) steady++
+      else { steady = 0; lastTop = top }
+      if (steady >= 4 || waited > 2000) {
+        clearInterval(timer)
+        window.scrollTo(smooth ? { top, behavior: 'smooth' } : { top })
+        // 그래도 중간에 끊기면(레이아웃이 더 밀리면) 한 번만 조용히 맞춰줍니다.
+        setTimeout(() => {
+          const now = document.querySelector(target)
+          if (!userMoved && now && Math.abs(window.scrollY - offsetOf(now)) > 40) {
+            window.scrollTo({ top: offsetOf(now) })
+          }
+          cleanup()
+        }, smooth ? 1700 : 900) // 부드러운 스크롤이 끝날 시간을 준 뒤에 확인합니다
+        return
+      }
+    }
+    if (waited >= timeout) { clearInterval(timer); cleanup() }
+  }, 50)
+}
 document.querySelectorAll('[data-scroll]').forEach((el) =>
   el.addEventListener('click', (ev) => {
     ev.preventDefault()
     const target = el.dataset.scroll
-    const go = () => document.querySelector(target)?.scrollIntoView({ behavior: 'smooth' })
     if ((location.hash || '#/') !== '#/') {
+      pendingScroll = target // 홈은 좌측 상단 워드마크로 가므로, 이 링크는 항상 섹션까지 데려갑니다
       location.hash = '#/'
-      setTimeout(go, 450) // 홈 렌더 후 스크롤
-    } else go()
+    } else scrollToSectionWhenReady(target)  // 이미 홈이면 부드럽게 내려갑니다
   }))
 
 // ---------- 인트로 (스크롤 패럴랙스) ----------
@@ -145,7 +187,8 @@ function setupIntro(isHome) {
   introBusy = false
   document.documentElement.style.removeProperty('--heroShift')
   document.documentElement.style.removeProperty('--belowShift')
-  if (isHome && document.querySelector('.hero') && !introSeenRecently()) {
+  // 섹션으로 바로 내려가려는 이동이면 인트로를 띄우지 않습니다(intro-lock이 스크롤을 막습니다).
+  if (isHome && document.querySelector('.hero') && !introSeenRecently() && !pendingScroll) {
     introActive = true
     window.scrollTo(0, 0)
     computeIntroY()
@@ -1331,6 +1374,13 @@ async function route() {
   }
   if (isHome) setupIntro(true) // 인트로 모드 + 초기 스크롤 위치 지정
   else { document.body.classList.remove('intro-on'); window.scrollTo(0, 0) }
+  if (isHome && pendingScroll) {
+    // 다른 페이지에서 넘어온 경우입니다. 화면이 이미 통째로 새로 그려졌으니
+    // 긴 거리를 애니메이션할 이유가 없고, 앵커처럼 바로 착지하는 편이 확실합니다.
+    const target = pendingScroll
+    pendingScroll = null
+    scrollToSectionWhenReady(target, { smooth: false })
+  }
   updateNavActive() // 내비 활성 표시 (홈은 스크롤 위치 기준)
   markLoadedImages() // 캐시된 이미지 즉시 표시
   // 페이지 전환 페이드인
