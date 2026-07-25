@@ -566,3 +566,61 @@ describe('scheduled cleanup', () => {
     expect(await env.DB.prepare('SELECT id FROM collections WHERE id = ?').bind(staleCollectionId).first()).toBeNull()
   })
 })
+
+describe('photo stream pagination', () => {
+  it('counts the total only on the first page', async () => {
+    const collectionId = await seedCollection({ title: 'Stream', published: 1 })
+    for (let i = 0; i < 3; i++) {
+      await env.DB.prepare('INSERT INTO photos (collection_id, key_large, key_thumb, sort_order) VALUES (?, ?, ?, ?)')
+        .bind(collectionId, `stream-l-${i}`, `stream-t-${i}`, i).run()
+    }
+
+    const firstPage = await (await SELF.fetch('https://example.com/api/photos?offset=0&limit=2')).json()
+    expect(firstPage.total).toBe(3)
+    expect(firstPage.photos).toHaveLength(2)
+
+    // 이후 페이지는 total을 다시 세지 않습니다(무한 스크롤마다 전체 스캔 방지).
+    const secondPage = await (await SELF.fetch('https://example.com/api/photos?offset=2&limit=2')).json()
+    expect(secondPage.total).toBeNull()
+    expect(secondPage.photos).toHaveLength(1)
+  })
+})
+
+describe('view counting', () => {
+  const visit = (headers = {}) => SELF.fetch('https://example.com/', {
+    headers: { 'sec-fetch-dest': 'document', 'sec-fetch-mode': 'navigate', ...headers },
+  })
+  const totalViews = async () => (await env.DB.prepare('SELECT COALESCE(SUM(views), 0) AS n FROM site_daily_views').first()).n
+
+  it('counts a real browser navigation but not link-preview bots', async () => {
+    expect(await totalViews()).toBe(0)
+    await visit()
+    expect(await totalViews()).toBe(1)
+    // Sec-Fetch 헤더가 없는 요청(미리보기 봇·스크래퍼)은 세지 않습니다.
+    await SELF.fetch('https://example.com/')
+    expect(await totalViews()).toBe(1)
+  })
+
+  it('stops counting a browser that opted out with ?nostat=1', async () => {
+    await visit()
+    expect(await totalViews()).toBe(1)
+
+    const response = await SELF.fetch('https://example.com/?nostat=1', {
+      headers: { 'sec-fetch-dest': 'document', 'sec-fetch-mode': 'navigate' },
+    })
+    const cookie = response.headers.get('set-cookie')?.split(';')[0]
+    expect(cookie).toContain('nostat=1')
+
+    const countBefore = await totalViews()
+    await visit({ cookie })
+    await visit({ cookie })
+    expect(await totalViews()).toBe(countBefore)
+  })
+
+  it('excludes a logged-in admin', async () => {
+    const { cookie } = await login()
+    const before = await totalViews()
+    await visit({ cookie })
+    expect(await totalViews()).toBe(before)
+  })
+})

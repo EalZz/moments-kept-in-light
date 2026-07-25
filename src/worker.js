@@ -144,6 +144,27 @@ app.get('/api/me', async (c) => c.json({ admin: await isAdmin(c) }))
 function isDirectPageVisit(c) {
   return c.req.header('sec-fetch-dest') === 'document' && c.req.header('sec-fetch-mode') === 'navigate'
 }
+// 집계 제외 쿠키. `/?nostat=1` 로 한 번 접속하면 이후 그 브라우저의 방문은 세지 않습니다.
+// (본인 확인용 방문이나 개발 중 반복 접속이 통계를 부풀리지 않게 합니다. `/?nostat=0` 으로 해제)
+const NOSTAT_COOKIE = 'nostat'
+function applyNostatPreference(c) {
+  const wanted = c.req.query('nostat')
+  if (wanted === '1') {
+    setCookie(c, NOSTAT_COOKIE, '1', {
+      httpOnly: true,
+      secure: new URL(c.req.url).protocol === 'https:',
+      sameSite: 'Lax',
+      path: '/',
+      maxAge: 60 * 60 * 24 * 365,
+    })
+    return true
+  }
+  if (wanted === '0') {
+    deleteCookie(c, NOSTAT_COOKIE, { path: '/' })
+    return false
+  }
+  return getCookie(c, NOSTAT_COOKIE) === '1'
+}
 async function recordSiteView(db) {
   await db.prepare(
     `INSERT INTO site_daily_views (view_date, views)
@@ -490,14 +511,18 @@ app.get('/api/photos', async (c) => {
               (p.sort_order IS NULL), p.sort_order, p.taken_at, p.id
      LIMIT ? OFFSET ?`
   ).bind(limit, offset).all()
-  const totalRow = await c.env.DB.prepare(
-    `SELECT COUNT(*) AS n FROM photos p JOIN collections col ON col.id = p.collection_id
-     WHERE p.deleted_at IS NULL AND col.deleted_at IS NULL${includeDrafts ? '' : ' AND col.published = 1'}`
-  ).first()
+  // 총 개수는 첫 페이지에서만 셉니다. 페이지마다 COUNT(*)를 다시 돌리면 무한 스크롤을
+  // 한 번 당길 때마다 사진 전체를 훑게 됩니다. (이후 페이지는 total: null)
+  const totalRow = offset === 0
+    ? await c.env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM photos p JOIN collections col ON col.id = p.collection_id
+         WHERE p.deleted_at IS NULL AND col.deleted_at IS NULL${includeDrafts ? '' : ' AND col.published = 1'}`
+      ).first()
+    : null
   const { results: modelNameRows } = await c.env.DB.prepare('SELECT handle, name FROM model_names').all()
   const modelNames = Object.fromEntries(modelNameRows.map((row) => [row.handle.toLowerCase(), row.name]))
   return c.json({
-    total: totalRow.n,
+    total: totalRow ? totalRow.n : null,
     photos: results.map((r) => {
       const meta = parseJsonObject(r.g_meta)
       const handles = [].concat(meta.twitter || [])
@@ -1270,9 +1295,10 @@ app.get('/share/collection/:id', async (c) => {
 })
 
 app.get('/', async (c) => {
-  // 로그인한 관리자의 갤러리 확인은 조회수에서 제외합니다.
+  // 로그인한 관리자의 갤러리 확인과 집계 제외(nostat) 브라우저는 조회수에서 빼둡니다.
   // 통계 저장 실패가 갤러리 자체를 막지는 않도록 분리합니다.
-  if (isDirectPageVisit(c) && !(await isAdmin(c))) {
+  const optedOut = applyNostatPreference(c)
+  if (isDirectPageVisit(c) && !optedOut && !(await isAdmin(c))) {
     await recordSiteView(c.env.DB).catch((error) => console.error('site view recording failed', error))
   }
   const res = await c.env.ASSETS.fetch(c.req.raw)
@@ -1296,9 +1322,8 @@ app.get('/', async (c) => {
     `<meta name="twitter:image" content="${ogImage}" />`,
   ].join('\n  ')
   html = html.replace('</head>', '  ' + tags + '\n</head>')
-  return new Response(html, {
-    headers: { 'Content-Type': 'text/html; charset=utf-8' },
-  })
+  // c.html로 반환해야 위에서 설정한 쿠키(nostat)가 응답에 함께 실립니다.
+  return c.html(html)
 })
 
 // ---------- image serving (R2) ----------

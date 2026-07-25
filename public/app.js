@@ -823,7 +823,10 @@ window.addEventListener('scroll', async () => {
     const r = await api(`/photos?offset=${photosMore.offset}&limit=60`)
     jSets[0].photos.push(...r.photos.map(decoratePhoto))
     photosMore.offset += r.photos.length
-    photosMore.total = r.total
+    // 총 개수는 첫 페이지 응답에만 담깁니다(이후 페이지는 null). 처음 값을 그대로 유지합니다.
+    if (typeof r.total === 'number') photosMore.total = r.total
+    // 응답이 비면 더 받을 게 없다는 뜻이라 반복 요청을 멈춥니다.
+    if (!r.photos.length) photosMore.total = photosMore.offset
     layoutJustifiedAll()
   } finally {
     photosMore.loading = false
