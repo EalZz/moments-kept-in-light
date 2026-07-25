@@ -1,21 +1,60 @@
 /* 디스플레이 서체는 같은 도메인에서 직접 서빙합니다.
-   구글 폰트로 불러오면 트위터 같은 인앱 브라우저에서 요청이 막혀 서체가 통째로 사라졌습니다.
-   (Cormorant Garamond는 가변 폰트라 400~600을 한 파일이 담당합니다) */
+   구글 폰트로 불러오면 트위터 같은 앱 내장 브라우저에서 요청이 막혀 서체가 통째로 사라졌습니다.
+   굵기는 파일마다 하나씩 고정했습니다. `font-weight: 400 600` 같은 가변 폰트 범위 문법은
+   지원하지 않는 구형 WebView가 @font-face 규칙을 통째로 버리기 때문입니다. */
 @font-face {
   font-family: 'Cormorant Garamond';
   font-style: normal;
-  font-weight: 400 600;
+  font-weight: 400;
   font-display: swap;
-  src: url('/fonts/cormorant-garamond-latin.woff2') format('woff2');
+  src: url('/fonts/cormorant-latin-400.woff2') format('woff2');
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
     U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 @font-face {
   font-family: 'Cormorant Garamond';
   font-style: normal;
-  font-weight: 400 600;
+  font-weight: 400;
   font-display: swap;
-  src: url('/fonts/cormorant-garamond-latin-ext.woff2') format('woff2');
+  src: url('/fonts/cormorant-latin-ext-400.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308,
+    U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113,
+    U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Cormorant Garamond';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/cormorant-latin-500.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Cormorant Garamond';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/cormorant-latin-ext-500.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308,
+    U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113,
+    U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Cormorant Garamond';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/cormorant-latin-600.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Cormorant Garamond';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/cormorant-latin-ext-600.woff2') format('woff2');
   unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308,
     U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113,
     U+2C60-2C7F, U+A720-A7FF;
@@ -23,35 +62,72 @@
 @font-face {
   font-family: 'Cormorant Garamond';
   font-style: italic;
-  font-weight: 400 500;
+  font-weight: 400;
   font-display: swap;
-  src: url('/fonts/cormorant-garamond-latin-italic.woff2') format('woff2');
+  src: url('/fonts/cormorant-latin-italic-400.woff2') format('woff2');
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
     U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 @font-face {
   font-family: 'Cormorant Garamond';
   font-style: italic;
-  font-weight: 400 500;
+  font-weight: 400;
   font-display: swap;
-  src: url('/fonts/cormorant-garamond-latin-ext-italic.woff2') format('woff2');
+  src: url('/fonts/cormorant-latin-ext-italic-400.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308,
+    U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113,
+    U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Cormorant Garamond';
+  font-style: italic;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/cormorant-latin-italic-500.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Cormorant Garamond';
+  font-style: italic;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/cormorant-latin-ext-italic-500.woff2') format('woff2');
   unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308,
     U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113,
     U+2C60-2C7F, U+A720-A7FF;
 }
 
-/* 구글 폰트가 막힌 환경(트위터 인앱 브라우저 등)에서 한글이 명조를 잃지 않게,
-   상용 한글 2,350자 서브셋을 같은 도메인에 두고 Noto Serif KR '다음' 순위로 둡니다.
-   웹폰트는 실제로 필요할 때만 내려오므로, 구글 폰트가 정상인 방문자는 이 파일을 받지 않습니다.
+/* 구글 폰트가 막힌 환경에서 한글이 명조를 잃지 않게, 상용 한글 2,350자 서브셋을
+   같은 도메인에 두고 Noto Serif KR '다음' 순위로 둡니다. 웹폰트는 실제로 필요할 때만
+   내려오므로, 구글 폰트가 정상인 방문자는 이 파일을 받지 않습니다.
    상용 밖의 드문 음절(예: 묭)은 기기의 명조계 서체로 넘어갑니다. */
 @font-face {
   font-family: 'Noto Serif KR Fallback';
   font-style: normal;
-  font-weight: 400 600;
+  font-weight: 400;
   font-display: swap;
-  src: url('/fonts/noto-serif-kr-common.woff2') format('woff2');
+  src: url('/fonts/noto-serif-kr-common-500.woff2') format('woff2');
   unicode-range: U+3000-30FF, U+3130-318F, U+AC00-D7A3, U+FF01-FF60;
 }
+@font-face {
+  font-family: 'Noto Serif KR Fallback';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/noto-serif-kr-common-500.woff2') format('woff2');
+  unicode-range: U+3000-30FF, U+3130-318F, U+AC00-D7A3, U+FF01-FF60;
+}
+@font-face {
+  font-family: 'Noto Serif KR Fallback';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/noto-serif-kr-common-500.woff2') format('woff2');
+  unicode-range: U+3000-30FF, U+3130-318F, U+AC00-D7A3, U+FF01-FF60;
+}
+
+
 
 :root {
   --bg: #0b0b0d;
@@ -64,8 +140,11 @@
   --accent: #b8a98c;                      /* 절제된 웜뉴트럴 악센트 (호버/활성) */
   --radius: 4px;
   /* 한글은 Noto Serif KR을 쓰되, 그것도 못 받으면 기기에 있는 명조계 서체로 내려갑니다 */
+  /* 웹폰트가 전부 실패해도 명조/세리프로 떨어지게 실제 존재하는 서체 이름을 나열합니다.
+     일부 기기(MIUI 등)는 generic `serif` 를 시스템 산세리프로 매핑해버립니다. */
   --font-display: "Cormorant Garamond", "Noto Serif KR", "Noto Serif KR Fallback",
-    "Nanum Myeongjo", AppleMyungjo, Batang, serif;
+    "Nanum Myeongjo", AppleMyungjo, "Noto Serif CJK KR", "Noto Serif", "Times New Roman",
+    Batang, 바탕, serif;
 
   /* 글래스 표면 — 내비·모바일 메뉴·검색 패널이 모두 같은 값을 씁니다.
      블러가 실제로 보이도록 배경을 충분히 투명하게 두고(0.62), 그만큼 강하게 흐려

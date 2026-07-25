@@ -1715,6 +1715,16 @@ app.get('/', async (c) => {
     `<meta name="twitter:image" content="${ogImage}" />`,
   ].join('\n  ')
   html = html.replace('</head>', '  ' + tags + '\n</head>')
+
+  // 배포마다 style.css·app.js 주소를 바꿉니다. 그러지 않으면 캐시가 옛 파일을 계속 쓰는데,
+  // 특히 앱 내장 브라우저(트위터 등)에서 새 코드·서체가 반영되지 않아 확인이 어긋납니다.
+  const build = (c.env.CF_VERSION_METADATA?.id || '').slice(0, 8)
+  if (build) {
+    html = html
+      .replace('href="style.css"', `href="style.css?v=${build}"`)
+      .replace('src="app.js"', `src="app.js?v=${build}"`)
+      .replace('src="config.js"', `src="config.js?v=${build}"`)
+  }
   // c.html로 반환해야 위에서 설정한 쿠키(nostat)가 응답에 함께 실립니다.
   return c.html(html)
 })

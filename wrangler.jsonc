@@ -16,6 +16,8 @@
   "triggers": {
     "crons": ["0 18 * * *"]
   },
+  // 배포 버전 id를 HTML의 style.css·app.js 주소에 붙여, 캐시가 옛 파일을 붙잡지 못하게 합니다.
+  "version_metadata": { "binding": "CF_VERSION_METADATA" },
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
