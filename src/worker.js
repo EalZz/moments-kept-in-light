@@ -17,6 +17,34 @@ function parseJsonObject(value) {
   }
 }
 
+// 작품명 표기 통일. 같은 작품이 공백 차이로 갈라지지 않게 합니다.
+// 예: '승리의 여신 : 니케' → '승리의 여신: 니케' (공식 표기)
+export function normalizeSeries(value) {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .replace(/\s*:\s*/g, ': ')
+    .trim()
+}
+// '작품 - 캐릭터' 한 줄을 작품과 캐릭터로 나눕니다.
+// 구분자가 없으면 괄호 앞 이름을 그 자체로 작품으로 씁니다(오리지널·보컬로이드 계열).
+export function splitCharacterLine(raw) {
+  const text = String(raw || '').trim()
+  if (!text) return { series: '', character: '' }
+  const parts = text.split(/\s+[-–—]\s+/)
+  if (parts.length >= 2) {
+    return { series: normalizeSeries(parts[0]), character: parts.slice(1).join(' - ').trim() }
+  }
+  return { series: normalizeSeries(text.replace(/\s*[（(].*$/, '')), character: text }
+}
+
+// 폴더 메타에서 작품 목록을 얻습니다. series가 아직 없는 예전 데이터는 캐릭터명에서 유도합니다.
+export function seriesOf(meta) {
+  const stored = Array.isArray(meta?.series) ? meta.series.map(normalizeSeries).filter(Boolean) : []
+  if (stored.length) return stored
+  const derived = splitCharacterLine(meta?.character).series
+  return derived ? [derived] : []
+}
+
 async function digest(value) {
   return crypto.subtle.digest('SHA-256', textEncoder.encode(String(value)))
 }
@@ -285,7 +313,10 @@ app.get('/api/collections/:id', async (c) => {
   const { results: groups } = await c.env.DB.prepare(
     'SELECT * FROM groups WHERE collection_id = ? ORDER BY (sort_order IS NULL), sort_order, id'
   ).bind(id).all()
-  for (const g of groups) g.meta = parseJsonObject(g.meta_json)
+  for (const g of groups) {
+    g.meta = parseJsonObject(g.meta_json)
+    g.series = seriesOf(g.meta) // series 미설정 폴더는 캐릭터명에서 유도
+  }
   const { results: modelNameRows } = await c.env.DB.prepare('SELECT handle, name FROM model_names').all()
   const modelNames = Object.fromEntries(modelNameRows.map((row) => [row.handle.toLowerCase(), row.name]))
   for (const g of groups) {
@@ -373,14 +404,138 @@ async function loadModelBase(db, includeDrafts = false) {
     const metadata = parseJsonObject(g.meta_json)
     g.handles = [].concat(metadata.twitter || [])
     g.character = metadata.character || ''
+    g.series = seriesOf(metadata)
   }
   return { groups, cols, aliases, names }
 }
 
+// 모델 표시 이름 규칙(사이트 전체 공통): 등록 이름 → 그 모델 단독 폴더 이름 → @핸들.
+// 닉네임을 주로 보여주고 계정은 보조로 두기 때문에, 어느 화면에서든 같은 이름이 나와야 합니다.
+function modelNameResolver(groups, names, aliases) {
+  const fromFolder = {}
+  // 합동 폴더 이름은 '선혈 & 마요'처럼 닉네임을 &로 이어 씁니다.
+  // 쪼갠 조각 수가 핸들 수와 같을 때만 순서대로 짝지어 이름을 얻습니다.
+  for (const g of groups) {
+    if (g.handles.length < 2) continue
+    const parts = g.name.split('&').map((part) => part.trim()).filter(Boolean)
+    if (parts.length !== g.handles.length) continue
+    g.handles.forEach((handle, index) => {
+      const key = handle.toLowerCase()
+      if (!fromFolder[key]) fromFolder[key] = parts[index]
+    })
+  }
+  // 단독 폴더 이름이 더 확실하므로 나중에 덮어씁니다.
+  for (const g of groups) {
+    if (g.handles.length !== 1) continue
+    fromFolder[g.handles[0].toLowerCase()] = g.name
+  }
+  return (handle) => {
+    const key = String(handle || '').toLowerCase()
+    const canon = aliases ? resolveAlias(aliases, key) : key
+    return names[canon] || names[key] || fromFolder[canon] || fromFolder[key] || '@' + handle
+  }
+}
+
 // 모델 목록: 핸들 기준 자동 집계 (별칭 병합)
+// 통합 검색용 색인. 작품·캐릭터·모델·행사를 한 번에 내려 클라이언트가 즉시 필터링합니다.
+// (지금 규모에서는 입력마다 서버를 왕복하지 않는 쪽이 훨씬 빠릅니다)
+app.get('/api/search-index', async (c) => {
+  const includeDrafts = await isAdmin(c)
+  const visible = includeDrafts ? '' : ' AND col.published = 1'
+  const [groupRes, colRes, nameRes, aliasRes, searchAliasRes] = await c.env.DB.batch([
+    c.env.DB.prepare(
+      `SELECT g.id, g.name, g.meta_json, g.collection_id, col.title AS collection_title,
+              (SELECT COUNT(*) FROM photos WHERE group_id = g.id AND deleted_at IS NULL) AS photo_count,
+              (SELECT key_thumb FROM photos WHERE group_id = g.id AND deleted_at IS NULL
+                ORDER BY (sort_order IS NULL), sort_order, taken_at, id LIMIT 1) AS thumb
+       FROM groups g JOIN collections col ON col.id = g.collection_id
+       WHERE col.deleted_at IS NULL${visible}`
+    ),
+    c.env.DB.prepare(
+      `SELECT col.id, col.title, col.date,
+              (SELECT COUNT(*) FROM photos WHERE collection_id = col.id AND deleted_at IS NULL) AS photo_count,
+              (SELECT key_thumb FROM photos WHERE collection_id = col.id AND deleted_at IS NULL
+                ORDER BY (sort_order IS NULL), sort_order, taken_at, id LIMIT 1) AS thumb
+       FROM collections col
+       WHERE col.deleted_at IS NULL${includeDrafts ? '' : ' AND col.published = 1'}
+       ORDER BY (col.sort_order IS NOT NULL), col.sort_order, col.date DESC, col.id ASC`
+    ),
+    c.env.DB.prepare('SELECT handle, name FROM model_names'),
+    c.env.DB.prepare('SELECT old_handle, new_handle FROM model_aliases'),
+    c.env.DB.prepare('SELECT kind, target, alias FROM search_aliases'),
+  ])
+  const names = Object.fromEntries((nameRes.results || []).map((r) => [r.handle.toLowerCase(), r.name]))
+  const aliases = {}
+  for (const a of aliasRes.results || []) aliases[a.old_handle.toLowerCase()] = a.new_handle
+  // 검색 별칭: 공식명이 영어여도 통칭(서코·플엑 등)으로 찾히게 합니다.
+  const aliasBy = { collection: {}, series: {}, model: {} }
+  for (const row of searchAliasRes.results || []) {
+    const bucket = aliasBy[row.kind]
+    if (!bucket) continue
+    ;(bucket[String(row.target).toLowerCase()] ||= []).push(row.alias)
+  }
+  const aliasesFor = (kind, target) => aliasBy[kind][String(target).toLowerCase()] || []
+  // 모델 표시 이름은 사이트 전체와 같은 규칙을 씁니다.
+  const displayName = modelNameResolver(
+    (groupRes.results || []).map((g) => ({ name: g.name, handles: [].concat(parseJsonObject(g.meta_json).twitter || []) })),
+    names,
+    aliases
+  )
+
+  const characters = []
+  const seriesMap = new Map()
+  const modelMap = new Map()
+  for (const g of groupRes.results || []) {
+    const meta = parseJsonObject(g.meta_json)
+    const series = seriesOf(meta)
+    const handles = [].concat(meta.twitter || [])
+    if (meta.character) {
+      characters.push({
+        character: meta.character,
+        series,
+        collection_id: g.collection_id,
+        collection_title: g.collection_title,
+        group_id: g.id,
+        photo_count: g.photo_count,
+        thumb: g.thumb,
+        models: handles,
+      })
+    }
+    for (const s of series) {
+      const entry = seriesMap.get(s) || { name: s, character_count: 0, photo_count: 0, thumb: null }
+      entry.character_count++
+      entry.photo_count += g.photo_count
+      entry.thumb = entry.thumb || g.thumb
+      seriesMap.set(s, entry)
+    }
+    for (const raw of handles) {
+      const canon = resolveAlias(aliases, raw.toLowerCase())
+      const entry = modelMap.get(canon) || { handle: canon, name: displayName(raw), photo_count: 0, thumb: null }
+      entry.photo_count += g.photo_count
+      entry.thumb = entry.thumb || g.thumb
+      // 단독 폴더 이름은 등록 이름이 없을 때의 표시 이름으로 씁니다.
+      modelMap.set(canon, entry)
+    }
+  }
+  // 별칭을 각 항목에 붙여 클라이언트가 통칭으로도 찾을 수 있게 합니다.
+  const series = [...seriesMap.values()].sort((a, b) => b.photo_count - a.photo_count)
+  series.forEach((s) => { s.aliases = aliasesFor('series', s.name) })
+  const models = [...modelMap.values()].sort((a, b) => b.photo_count - a.photo_count)
+  models.forEach((m) => { m.aliases = aliasesFor('model', m.handle) })
+  // 행사 별칭은 이름 기준입니다. 같은 이름의 다른 회차도 같은 검색어로 찾히게 하려는 것입니다.
+  const collections = (colRes.results || []).map((col) => ({ ...col, aliases: aliasesFor('collection', col.title) }))
+  return c.json({
+    series,
+    characters: characters.sort((a, b) => b.photo_count - a.photo_count),
+    models,
+    collections,
+  }, 200, apiCacheHeaders(includeDrafts))
+})
+
 app.get('/api/models', async (c) => {
   const includeDrafts = await isAdmin(c)
   const { groups, cols, aliases, names } = await loadModelBase(c.env.DB, includeDrafts)
+  const displayName = modelNameResolver(groups, names, aliases)
   const colOrder = new Map(cols.map((col, i) => [col.id, i]))
   const { results: thumbRows } = await c.env.DB.prepare(
     'SELECT group_id, key_thumb FROM photos WHERE group_id IS NOT NULL AND deleted_at IS NULL ORDER BY (sort_order IS NULL), sort_order, taken_at, id'
@@ -406,7 +561,7 @@ app.get('/api/models', async (c) => {
   }
   const out = Object.entries(models).map(([canon, m]) => ({
     handle: m.handle,
-    name: names[canon] || m.soloName || '@' + m.handle,
+    name: names[canon] || m.soloName || displayName(m.handle),
     photo_count: m.photo_count,
     collection_count: m.cols.size,
     cover_thumb: m.best && m.best.thumb,
@@ -417,6 +572,199 @@ app.get('/api/models', async (c) => {
 })
 
 // 모델 상세: 행사별 섹션으로 사진 묶음
+// 대표사진 고를 때 보여줄, 그 작품에 속한 사진들 (admin)
+app.get('/api/series-photos', requireAdmin, async (c) => {
+  const name = normalizeSeries(c.req.query('name') || '')
+  if (!name) return c.json({ error: 'name required' }, 400)
+  const { results: groups } = await c.env.DB.prepare('SELECT id, meta_json FROM groups').all()
+  const ids = groups.filter((g) => seriesOf(parseJsonObject(g.meta_json)).includes(name)).map((g) => g.id)
+  if (!ids.length) return c.json({ photos: [] })
+  const { results } = await c.env.DB.prepare(
+    `SELECT id, key_thumb FROM photos
+     WHERE deleted_at IS NULL AND group_id IN (${ids.map(() => '?').join(',')})
+     ORDER BY (sort_order IS NULL), sort_order, taken_at, id LIMIT 200`
+  ).bind(...ids).all()
+  const current = await c.env.DB.prepare('SELECT cover_photo_id FROM series_meta WHERE name = ?').bind(name).first()
+  return c.json({ photos: results, cover_photo_id: current?.cover_photo_id ?? null })
+})
+
+// 작품 대표사진 지정 (admin). photo_id를 비우면 지정을 해제해 첫 사진으로 돌아갑니다.
+app.put('/api/series-cover', requireAdmin, async (c) => {
+  const body = await c.req.json()
+  const name = normalizeSeries(body.name || '')
+  if (!name) return c.json({ error: 'name required' }, 400)
+  const photoId = body.photo_id == null || body.photo_id === '' ? null : Number(body.photo_id)
+  if (photoId != null && !Number.isInteger(photoId)) return c.json({ error: 'invalid photo_id' }, 400)
+  if (photoId == null) {
+    await c.env.DB.prepare('DELETE FROM series_meta WHERE name = ?').bind(name).run()
+    return c.json({ ok: true, cover_photo_id: null })
+  }
+  const photo = await c.env.DB.prepare('SELECT id FROM photos WHERE id = ? AND deleted_at IS NULL').bind(photoId).first()
+  if (!photo) return c.json({ error: 'photo not found' }, 404)
+  await c.env.DB.prepare(
+    `INSERT INTO series_meta (name, cover_photo_id) VALUES (?, ?)
+     ON CONFLICT(name) DO UPDATE SET cover_photo_id = excluded.cover_photo_id`
+  ).bind(name, photoId).run()
+  return c.json({ ok: true, cover_photo_id: photoId })
+})
+
+// ---------- 검색 별칭 관리 (admin) ----------
+// 공식명이 영어인 행사(Comic World → 서코·부코·수코), 긴 작품명(승리의 여신: 니케 → 니케) 등을
+// 사람들이 실제로 쓰는 말로 찾을 수 있게 합니다.
+const ALIAS_KINDS = new Set(['collection', 'series', 'model'])
+
+app.get('/api/search-aliases', requireAdmin, async (c) => {
+  const { results } = await c.env.DB.prepare(
+    'SELECT kind, target, alias FROM search_aliases ORDER BY kind, target, alias'
+  ).all()
+  return c.json(results)
+})
+
+app.post('/api/search-aliases', requireAdmin, async (c) => {
+  const body = await c.req.json()
+  const kind = String(body.kind || '')
+  const target = String(body.target || '').trim()
+  if (!ALIAS_KINDS.has(kind) || !target) return c.json({ error: 'kind and target required' }, 400)
+  // 쉼표로 여러 개를 한 번에 등록할 수 있습니다.
+  const list = [...new Set(String(body.alias || '').split(',').map((a) => a.trim()).filter(Boolean))]
+  if (!list.length) return c.json({ error: 'alias required' }, 400)
+  if (list.some((a) => a.length > 40)) return c.json({ error: 'alias is too long' }, 400)
+  await c.env.DB.batch(list.map((alias) =>
+    c.env.DB.prepare('INSERT OR IGNORE INTO search_aliases (kind, target, alias) VALUES (?, ?, ?)')
+      .bind(kind, target, alias)))
+  return c.json({ ok: true, added: list.length })
+})
+
+app.delete('/api/search-aliases', requireAdmin, async (c) => {
+  const kind = c.req.query('kind') || ''
+  const target = c.req.query('target') || ''
+  const alias = c.req.query('alias') || ''
+  if (!ALIAS_KINDS.has(kind) || !target || !alias) return c.json({ error: 'kind, target, alias required' }, 400)
+  const result = await c.env.DB.prepare('DELETE FROM search_aliases WHERE kind = ? AND target = ? AND alias = ?')
+    .bind(kind, target, alias).run()
+  if (!result.meta.changes) return c.json({ error: 'not found' }, 404)
+  return c.json({ ok: true })
+})
+
+// ---------- 캐릭터 아카이브 ----------
+// 작품별로 묶은 캐릭터 목록. 같은 캐릭터가 여러 행사에 있으면 한 항목으로 합칩니다.
+app.get('/api/characters', async (c) => {
+  const includeDrafts = await isAdmin(c)
+  const { groups, cols, names, aliases } = await loadModelBase(c.env.DB, includeDrafts)
+  const displayName = modelNameResolver(groups, names, aliases)
+  // 폴더별 사진 수 + 표시 순서상 첫 썸네일을 한 번에 (폴더 수만큼만 행이 나옵니다)
+  const { results: counts } = await c.env.DB.prepare(
+    `SELECT group_id, n, key_thumb AS thumb FROM (
+       SELECT group_id, key_thumb,
+              COUNT(*) OVER (PARTITION BY group_id) AS n,
+              ROW_NUMBER() OVER (PARTITION BY group_id
+                ORDER BY (sort_order IS NULL), sort_order, taken_at, id) AS rn
+       FROM photos WHERE deleted_at IS NULL AND group_id IS NOT NULL
+     ) WHERE rn = 1`
+  ).all()
+  const countByGroup = Object.fromEntries(counts.map((r) => [r.group_id, r]))
+  const colOrder = Object.fromEntries(cols.map((col, i) => [col.id, i]))
+  // 작품 대표사진: 관리자가 지정한 사진이 있으면 그걸 씁니다(없으면 아래에서 첫 사진).
+  const { results: coverRows } = await c.env.DB.prepare(
+    `SELECT sm.name, p.key_thumb AS thumb FROM series_meta sm
+     JOIN photos p ON p.id = sm.cover_photo_id AND p.deleted_at IS NULL`
+  ).all()
+  const seriesCover = Object.fromEntries(coverRows.map((r) => [r.name, r.thumb]))
+
+  // 캐릭터 키는 이름 그대로 씁니다(의상 버전이 다르면 다른 항목으로 두는 편이 자연스럽습니다).
+  const byCharacter = new Map()
+  for (const g of groups) {
+    if (!g.character) continue
+    const stat = countByGroup[g.id]
+    if (!stat || !stat.n) continue
+    const entry = byCharacter.get(g.character) || {
+      character: g.character, series: [], photo_count: 0, thumb: null,
+      models: [], collection_id: null, group_id: null, _ord: Infinity,
+    }
+    entry.photo_count += stat.n
+    for (const s of g.series) if (!entry.series.includes(s)) entry.series.push(s)
+    for (const h of g.handles) if (!entry.models.includes(h)) entry.models.push(h)
+    // 대표 썸네일·링크는 표시 순서가 가장 앞선 행사 기준
+    const ord = colOrder[g.collection_id] ?? Infinity
+    if (ord < entry._ord) {
+      entry._ord = ord
+      entry.thumb = stat.thumb
+      entry.collection_id = g.collection_id
+      entry.group_id = g.id
+    }
+    byCharacter.set(g.character, entry)
+  }
+  const characters = [...byCharacter.values()]
+  characters.forEach((ch) => {
+    delete ch._ord
+    ch.model_names = ch.models.map(displayName)
+  })
+
+  // 작품별 묶음 — 캐릭터가 여러 작품에 걸쳐 있으면 각 작품에 모두 들어갑니다.
+  const seriesMap = new Map()
+  for (const ch of characters) {
+    for (const s of ch.series.length ? ch.series : ['']) {
+      const bucket = seriesMap.get(s) || { name: s, characters: [], photo_count: 0, thumb: null, cover_set: false }
+      bucket.characters.push(ch)
+      bucket.photo_count += ch.photo_count
+      if (seriesCover[s]) { bucket.thumb = seriesCover[s]; bucket.cover_set = true }
+      else if (!bucket.cover_set && !bucket.thumb) bucket.thumb = ch.thumb
+      seriesMap.set(s, bucket)
+    }
+  }
+  const series = [...seriesMap.values()]
+  series.forEach((s) => s.characters.sort((a, b) => b.photo_count - a.photo_count))
+  series.sort((a, b) => b.photo_count - a.photo_count || a.name.localeCompare(b.name))
+  return c.json({
+    character_count: characters.length,
+    series_count: series.length,
+    series,
+  }, 200, apiCacheHeaders(includeDrafts))
+})
+
+// 캐릭터 상세: 행사별 섹션으로 사진 묶음 (모델 상세와 같은 형태)
+app.get('/api/characters/:name', async (c) => {
+  const raw = decodeURIComponent(c.req.param('name'))
+  const includeDrafts = await isAdmin(c)
+  const { groups, cols, names, aliases } = await loadModelBase(c.env.DB, includeDrafts)
+  const displayName = modelNameResolver(groups, names, aliases)
+  const mine = groups.filter((g) => g.character === raw)
+  if (!mine.length) return c.json({ error: 'not found' }, 404)
+  const ids = mine.map((g) => g.id)
+  const { results: photos } = await c.env.DB.prepare(
+    `SELECT * FROM photos WHERE deleted_at IS NULL AND group_id IN (${ids.map(() => '?').join(',')})
+     ORDER BY (sort_order IS NULL), sort_order, taken_at, id`
+  ).bind(...ids).all()
+  for (const p of photos) p.exif = parseJsonObject(p.exif_json)
+  const byGroup = {}
+  for (const p of photos) (byGroup[p.group_id] ||= []).push(p)
+  const sections = []
+  for (const col of cols) {
+    for (const g of mine.filter((x) => x.collection_id === col.id)) {
+      if (!byGroup[g.id]) continue
+      sections.push({
+        collection_id: col.id,
+        title: col.title,
+        date: col.date,
+        character: g.character,
+        series: g.series,
+        handles: g.handles,
+        model_names: g.handles.map(displayName),
+        photos: byGroup[g.id],
+      })
+    }
+  }
+  if (!sections.length) return c.json({ error: 'not found' }, 404)
+  const allSeries = []
+  for (const g of mine) for (const s of g.series) if (!allSeries.includes(s)) allSeries.push(s)
+  return c.json({
+    character: raw,
+    series: allSeries,
+    photo_count: photos.length,
+    sections,
+  }, 200, apiCacheHeaders(includeDrafts))
+})
+
 app.get('/api/models/:handle', async (c) => {
   const raw = c.req.param('handle')
   const includeDrafts = await isAdmin(c)
@@ -443,18 +791,19 @@ app.get('/api/models/:handle', async (c) => {
         title: col.title,
         date: col.date,
         character: g.character,
+        series: g.series,
         handles: g.handles,
         photos: byGroup[g.id],
       })
     }
   }
-  // 표시 이름: 등록 이름 → 단독 폴더명 → @핸들
-  const solo = mine.find((g) => g.handles.length === 1)
+  // 표시 이름은 사이트 전체 공통 규칙(등록 이름 → 단독 폴더명 → 합동 폴더명 → @핸들)
+  const displayName = modelNameResolver(groups, names, aliases)
   const display = mine.find((g) => resolveAlias(aliases, (g.handles[0] || '').toLowerCase()) === canon)
   const handle = (display && display.handles.find((h) => resolveAlias(aliases, h.toLowerCase()) === canon)) || raw
   return c.json({
     handle,
-    name: names[canon] || (solo && solo.name) || '@' + handle,
+    name: displayName(handle),
     photo_count: photos.length,
     sections,
   }, 200, apiCacheHeaders(includeDrafts))
@@ -549,6 +898,7 @@ app.get('/api/photos', async (c) => {
         models: handles,
         model_names: handles.map((handle) => modelNames[handle.toLowerCase()] || (handles.length === 1 ? r.group_name : '')),
         character: meta.character || '',
+        series: seriesOf(meta),
       }
     }),
   }, 200, apiCacheHeaders(includeDrafts))
@@ -582,6 +932,7 @@ app.get('/api/feature-photos', async (c) => {
       models: handles,
       model_names: handles.map((handle) => modelNames[handle.toLowerCase()] || (handles.length === 1 ? r.group_name : '')),
       character: meta.character || '',
+      series: seriesOf(meta),
     }
   }), 200, apiCacheHeaders(includeDrafts))
 })
@@ -907,6 +1258,15 @@ app.patch('/api/groups/:id', requireAdmin, async (c) => {
     if (character) meta.character = character
     else delete meta.character
   }
+  // 작품(장르) — 쉼표 구분으로 여러 개. 오리지널 편입 캐릭터처럼 두 곳에 걸친 경우를 위해 배열입니다.
+  if ('series' in body) {
+    const list = (Array.isArray(body.series) ? body.series : String(body.series || '').split(','))
+      .map((s) => normalizeSeries(String(s)))
+      .filter(Boolean)
+    const unique = [...new Set(list)]
+    if (unique.length) meta.series = unique
+    else delete meta.series
+  }
   await c.env.DB.prepare('UPDATE groups SET name = ?, meta_json = ? WHERE id = ?')
     .bind(name, JSON.stringify(meta), id).run()
   return c.json({ ok: true })
@@ -1064,6 +1424,30 @@ app.post('/api/collections/:id/photos', requireAdmin, async (c) => {
 })
 
 // medium 백필: 워커는 이미지를 리사이즈할 수 없으므로 관리자 브라우저가 large를 받아 축소해 되돌려 줍니다.
+// 작품(series) 백필: 예전 폴더는 '작품 - 캐릭터' 한 줄만 갖고 있습니다.
+// dry_run=1 이면 무엇이 어떻게 채워질지만 미리 보여주고 저장하지 않습니다.
+app.post('/api/groups/backfill-series', requireAdmin, async (c) => {
+  const dryRun = c.req.query('dry_run') === '1'
+  const { results: groups } = await c.env.DB.prepare(
+    'SELECT id, name, meta_json FROM groups ORDER BY id'
+  ).all()
+  const planned = []
+  const statements = []
+  for (const g of groups) {
+    const meta = parseJsonObject(g.meta_json)
+    if (Array.isArray(meta.series) && meta.series.length) continue // 이미 채워진 폴더는 건드리지 않습니다
+    const { series } = splitCharacterLine(meta.character)
+    if (!series) continue
+    planned.push({ group_id: g.id, folder: g.name, character: meta.character || '', series: [series] })
+    if (!dryRun) {
+      statements.push(c.env.DB.prepare('UPDATE groups SET meta_json = ? WHERE id = ?')
+        .bind(JSON.stringify({ ...meta, series: [series] }), g.id))
+    }
+  }
+  if (statements.length) await c.env.DB.batch(statements)
+  return c.json({ dry_run: dryRun, updated: dryRun ? 0 : planned.length, planned })
+})
+
 app.get('/api/photos/missing-medium', requireAdmin, async (c) => {
   const limit = Math.min(200, Math.max(1, parseInt(c.req.query('limit') || '50', 10) || 50))
   const [{ results }, remainingRow] = await c.env.DB.batch([

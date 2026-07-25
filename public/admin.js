@@ -182,12 +182,14 @@ async function renderCollections() {
         <div class="admin-menu-popup" role="menu" hidden>
           <button id="backupBtn">메타데이터 백업</button>
           <button id="mediumBackfillBtn">중간 크기 채우기</button>
+          <button id="seriesBackfillBtn">작품 자동 채우기</button>
           <button id="photoBackupBtn">사진 원본 백업</button>
           <button id="photoRestoreBtn">최근 원본 복원</button>
           <button id="photoBackupDeleteBtn">스냅샷 삭제</button>
           <button id="trashBtn">휴지통</button>
           <button id="gridBtnMain">그리드 이미지</button>
           <button id="modelMgrBtn">모델 관리</button>
+          <button id="seriesMgrBtn">작품·검색어 관리</button>
           <button id="aboutBtn">About 편집</button>
           <button id="galleryBtn">갤러리 보기</button>
           <button id="logoutBtn">로그아웃</button>
@@ -240,6 +242,21 @@ async function renderCollections() {
   document.getElementById('backupBtn').addEventListener('click', async () => {
     try { await downloadBackup() } catch (e) { alert('백업 다운로드 실패: ' + e.message) }
   })
+  document.getElementById('seriesBackfillBtn').addEventListener('click', async () => {
+    try {
+      const preview = await api('/groups/backfill-series?dry_run=1', { method: 'POST' })
+      if (!preview.planned.length) return alert('모든 폴더에 작품이 이미 지정되어 있습니다.')
+      const sample = preview.planned.slice(0, 12)
+        .map((p) => `· ${p.series.join(', ')}  ←  ${p.character || p.folder}`).join('\n')
+      const more = preview.planned.length > sample.length ? `\n… 외 ${preview.planned.length - sample.length}개` : ''
+      if (!confirm(`폴더 ${preview.planned.length}개의 작품을 캐릭터명에서 자동으로 채웁니다.\n\n${sample}${more}\n\n계속할까요?`)) return
+      const result = await api('/groups/backfill-series', { method: 'POST' })
+      alert(`폴더 ${result.updated}개에 작품을 채웠습니다.`)
+      renderCollections()
+    } catch (e) {
+      alert('작품 자동 채우기 실패: ' + e.message)
+    }
+  })
   document.getElementById('mediumBackfillBtn').addEventListener('click', async (event) => {
     const button = event.currentTarget
     const { remaining } = await api('/photos/missing-medium?limit=1').catch(() => ({ remaining: 0 }))
@@ -287,6 +304,7 @@ async function renderCollections() {
   document.getElementById('trashBtn').addEventListener('click', openTrash)
   document.getElementById('gridBtnMain').addEventListener('click', openGridMaker)
   document.getElementById('modelMgrBtn').addEventListener('click', openModelManager)
+  document.getElementById('seriesMgrBtn').addEventListener('click', openSeriesManager)
   document.getElementById('aboutBtn').addEventListener('click', openAboutEditor)
   document.getElementById('galleryBtn').addEventListener('click', () => { location.href = '/' })
   document.getElementById('logoutBtn').addEventListener('click', async () => {
@@ -488,6 +506,10 @@ function createAdminDialog(title, content) {
 function openGroupEditor(group, onSaved) {
   const currentHandles = [].concat((group.meta && group.meta.twitter) || []).join(', ')
   const currentCharacter = (group.meta && group.meta.character) || ''
+  // 직접 저장한 작품만 입력칸에 채웁니다. 유도값(group.series)을 채워두면 그대로 저장돼
+  // 캐릭터명을 나중에 고쳐도 옛 값이 남습니다. 유도값은 placeholder로만 보여줍니다.
+  const currentSeries = [].concat((group.meta && group.meta.series) || []).join(', ')
+  const derivedSeries = [].concat(group.series || []).join(', ')
   const { overlay, close } = createAdminDialog('폴더 정보 편집', `
     <div class="form-field">
       <label for="groupName">폴더 이름</label>
@@ -502,6 +524,11 @@ function openGroupEditor(group, onSaved) {
       <label for="creditCharacter">캐릭터명</label>
       <input id="creditCharacter" value="${esc(currentCharacter)}" placeholder="예: 붕괴: 스타레일 - 연희" />
       <div class="field-hint">비우면 갤러리에 캐릭터명이 표시되지 않습니다.</div>
+    </div>
+    <div class="form-field">
+      <label for="creditSeries">작품 (장르)</label>
+      <input id="creditSeries" value="${esc(currentSeries)}" placeholder="${esc(derivedSeries || '예: 붕괴: 스타레일')}" />
+      <div class="field-hint">${derivedSeries && !currentSeries ? `비워두면 캐릭터명에서 <b>${esc(derivedSeries)}</b>로 자동 지정됩니다. ` : ''}여러 곳에 걸친 캐릭터는 쉼표로 구분해 둘 다 넣을 수 있습니다 (예: 보컬로이드, 카루네 시에).</div>
     </div>
     <div class="dialog-actions"><button type="button" class="dialogCancel">취소</button><button type="button" class="primary dialogSave">저장</button></div>`)
   overlay.querySelector('.dialogCancel').addEventListener('click', close)
@@ -520,6 +547,7 @@ function openGroupEditor(group, onSaved) {
           name,
           twitter: overlay.querySelector('#creditHandles').value.trim(),
           character: overlay.querySelector('#creditCharacter').value.trim(),
+          series: overlay.querySelector('#creditSeries').value.trim(),
         },
       })
       close()
@@ -789,6 +817,146 @@ async function renderCollection(id) {
       renderCollection(id)
     })
   })
+}
+
+// ---------- 작품·검색어 관리 ----------
+// 작품 대표사진과, 사람들이 실제로 쓰는 검색어(서코·플엑 등)를 여기서 관리합니다.
+const ALIAS_SECTIONS = [
+  { kind: 'series', label: '작품', hint: '예: 승리의 여신: 니케 → 니케' },
+  { kind: 'collection', label: '행사', hint: '이름이 같은 회차는 함께 적용됩니다 — 예: Comic World → 서코, 부코, 수코' },
+  { kind: 'model', label: '모델', hint: '계정을 몰라도 부르는 이름으로 찾히게' },
+]
+
+async function openSeriesManager() {
+  const [characters, aliases, collections, models] = await Promise.all([
+    api('/characters'), api('/search-aliases'), api('/collections'), api('/models'),
+  ])
+  const aliasOf = (kind, target) => aliases
+    .filter((a) => a.kind === kind && String(a.target) === String(target))
+    .map((a) => a.alias)
+  const byKorean = (a, b) => String(a).localeCompare(String(b), 'ko')
+  // 행사 별칭은 '이름' 기준입니다. 같은 이름의 회차(날짜만 다른 것)를 한 줄로 묶어
+  // 검색어를 한 번만 등록하면 모든 회차가 함께 찾히게 합니다.
+  const collectionsByTitle = [...collections.reduce((map, col) => {
+    const entry = map.get(col.title) || { title: col.title, dates: [], count: 0 }
+    if (col.date) entry.dates.push(col.date)
+    entry.count++
+    return map.set(col.title, entry)
+  }, new Map()).values()].sort((x, y) => byKorean(x.title, y.title))
+
+  // 별칭 편집 줄 — 등록된 별칭은 지울 수 있는 칩으로, 아래 입력창으로 추가합니다.
+  const aliasRow = (kind, target, title, sub) => `
+    <div class="alias-item" data-kind="${esc(kind)}" data-target="${esc(String(target))}">
+      <div class="t">
+        <div class="title">${esc(title)}</div>
+        ${sub ? `<div class="info">${esc(sub)}</div>` : ''}
+        <div class="alias-chips">
+          ${aliasOf(kind, target).map((a) =>
+            `<button type="button" class="alias-chip" data-alias="${esc(a)}" title="클릭하면 삭제">${esc(a)} ×</button>`).join('')
+            || '<span class="muted" style="font-size:11px">등록된 검색어 없음</span>'}
+        </div>
+      </div>
+      <div class="alias-add">
+        <input class="aliasInput" placeholder="검색어 추가 (쉼표로 여러 개)" />
+        <button class="aliasAdd">추가</button>
+      </div>
+    </div>`
+
+  const seriesRows = [...characters.series].sort((x, y) => byKorean(x.name, y.name)).map((sr) => `
+    <div class="series-mgr-item">
+      ${sr.thumb ? `<img src="/img/${esc(sr.thumb)}" />` : '<div class="ph-placeholder"></div>'}
+      <div class="t" style="flex:1;min-width:0">
+        <div class="title">${esc(sr.name || '작품 미지정')}${sr.cover_set ? ' <span class="muted" style="font-size:11px">대표 지정됨</span>' : ''}</div>
+        <div class="info">캐릭터 ${sr.characters.length}명 · ${sr.photo_count}장</div>
+      </div>
+      <button class="pickCover" data-name="${esc(sr.name)}">대표사진</button>
+    </div>
+    ${aliasRow('series', sr.name, sr.name || '작품 미지정', '')}`).join('')
+
+  const overlay = document.createElement('div')
+  overlay.className = 'grid-maker'
+  overlay.innerHTML = `
+    <div class="inner">
+      <div class="gm-top"><h3>작품 · 검색어 관리</h3><button id="smClose">닫기</button></div>
+      <div class="panel">
+        <h3>작품 <span class="muted">${characters.series_count}개 — 대표사진과 검색어를 지정합니다</span></h3>
+        ${seriesRows || '<p class="muted">작품이 아직 없습니다.</p>'}
+      </div>
+      <div class="panel">
+        <h3>행사 검색어 <span class="muted">${ALIAS_SECTIONS[1].hint}</span></h3>
+        ${collectionsByTitle.map((col) => aliasRow(
+            'collection', col.title, col.title,
+            col.count > 1 ? `${col.count}회 · ${col.dates.sort().join(', ')}` : (col.dates[0] || '')
+          )).join('') || '<p class="muted">행사가 아직 없습니다.</p>'}
+      </div>
+      <div class="panel">
+        <h3>모델 검색어 <span class="muted">${ALIAS_SECTIONS[2].hint}</span></h3>
+        ${[...models].sort((x, y) => byKorean(x.name, y.name))
+            .map((m) => aliasRow('model', m.handle, m.name, '@' + m.handle)).join('')
+          || '<p class="muted">모델이 아직 없습니다.</p>'}
+      </div>
+    </div>`
+  document.body.appendChild(overlay)
+  document.body.style.overflow = 'hidden'
+  const close = () => { document.body.style.overflow = ''; overlay.remove() }
+  const refresh = () => { close(); openSeriesManager() }
+  overlay.querySelector('#smClose').addEventListener('click', close)
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close() })
+
+  // 검색어 추가
+  overlay.querySelectorAll('.aliasAdd').forEach((btn) => btn.addEventListener('click', async () => {
+    const item = btn.closest('.alias-item')
+    const input = item.querySelector('.aliasInput')
+    const alias = input.value.trim()
+    if (!alias) return input.focus()
+    btn.disabled = true
+    try {
+      await api('/search-aliases', { method: 'POST', json: { kind: item.dataset.kind, target: item.dataset.target, alias } })
+      refresh()
+    } catch (e) { alert('검색어 추가 실패: ' + e.message); btn.disabled = false }
+  }))
+  overlay.querySelectorAll('.aliasInput').forEach((input) =>
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') input.closest('.alias-item').querySelector('.aliasAdd').click() }))
+
+  // 검색어 삭제 (칩 클릭)
+  overlay.querySelectorAll('.alias-chip').forEach((chip) => chip.addEventListener('click', async () => {
+    const item = chip.closest('.alias-item')
+    const q = new URLSearchParams({ kind: item.dataset.kind, target: item.dataset.target, alias: chip.dataset.alias })
+    try {
+      await api('/search-aliases?' + q, { method: 'DELETE' })
+      refresh()
+    } catch (e) { alert('검색어 삭제 실패: ' + e.message) }
+  }))
+
+  // 대표사진 지정
+  overlay.querySelectorAll('.pickCover').forEach((btn) =>
+    btn.addEventListener('click', () => openSeriesCoverPicker(btn.dataset.name, refresh)))
+}
+
+async function openSeriesCoverPicker(name, onSaved) {
+  const { photos, cover_photo_id } = await api('/series-photos?name=' + encodeURIComponent(name))
+  const { overlay, close } = createAdminDialog(`대표사진 — ${name}`, `
+    <p class="muted" style="margin-bottom:12px">사진을 누르면 이 작품의 대표사진이 됩니다.</p>
+    <div class="gm-picker" style="max-height:420px">
+      ${photos.map((p) => `
+        <div class="pick${p.id === cover_photo_id ? ' on' : ''}" data-id="${p.id}">
+          <img src="/img/${esc(p.key_thumb)}" />
+        </div>`).join('') || '<p class="muted">사진이 없습니다.</p>'}
+    </div>
+    <div class="dialog-actions">
+      <button type="button" class="clearCover">지정 해제</button>
+      <button type="button" class="dialogCancel">닫기</button>
+    </div>`)
+  const save = async (photoId) => {
+    try {
+      await api('/series-cover', { method: 'PUT', json: { name, photo_id: photoId } })
+      close()
+      onSaved()
+    } catch (e) { alert('대표사진 저장 실패: ' + e.message) }
+  }
+  overlay.querySelectorAll('.pick').forEach((el) => el.addEventListener('click', () => save(+el.dataset.id)))
+  overlay.querySelector('.clearCover').addEventListener('click', () => save(null))
+  overlay.querySelector('.dialogCancel').addEventListener('click', close)
 }
 
 // ---------- About 편집 ----------

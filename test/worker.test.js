@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { env, SELF } from 'cloudflare:test'
-import { persistUpload, runScheduledCleanup, trashRetentionDays } from '../src/worker.js'
+import { persistUpload, runScheduledCleanup, trashRetentionDays, normalizeSeries, splitCharacterLine, seriesOf } from '../src/worker.js'
 
 async function login(password = 'test-password') {
   const response = await SELF.fetch('https://example.com/api/login', {
@@ -646,5 +646,216 @@ describe('api caching', () => {
       const response = await SELF.fetch(`https://example.com${path}`, { headers: { cookie } })
       expect(response.headers.get('cache-control'), path).toBe('private, no-store')
     }
+  })
+})
+
+describe('series parsing', () => {
+  it('splits 작품 - 캐릭터 and unifies punctuation spacing', () => {
+    expect(splitCharacterLine('체인소 맨 - 마키마')).toEqual({ series: '체인소 맨', character: '마키마' })
+    // 콜론 앞 공백이 다른 두 표기가 같은 작품으로 모입니다.
+    expect(splitCharacterLine('승리의 여신 : 니케 - 크러스트').series).toBe('승리의 여신: 니케')
+    expect(splitCharacterLine('승리의 여신: 니케 - 헨젤').series).toBe('승리의 여신: 니케')
+    expect(normalizeSeries('붕괴 :  스타레일')).toBe('붕괴: 스타레일')
+  })
+
+  it('uses the character itself as the series when there is no 작품 prefix', () => {
+    // 오리지널·보컬로이드 계열: 괄호 앞 이름이 작품이 됩니다.
+    expect(splitCharacterLine('하츠네 미쿠 (ver. 뱀파이어)')).toEqual({
+      series: '하츠네 미쿠', character: '하츠네 미쿠 (ver. 뱀파이어)',
+    })
+    expect(splitCharacterLine('카루네 시에 (하츠네 미쿠 ver. 세균오염)').series).toBe('카루네 시에')
+  })
+
+  it('prefers a stored series list over the derived one', () => {
+    expect(seriesOf({ series: ['보컬로이드', '카루네 시에'], character: '카루네 시에 (…)' }))
+      .toEqual(['보컬로이드', '카루네 시에'])
+    expect(seriesOf({ character: '나루토 - 사스케' })).toEqual(['나루토'])
+    expect(seriesOf({})).toEqual([])
+  })
+})
+
+describe('series storage', () => {
+  it('saves multiple series on a folder and exposes them publicly', async () => {
+    const collectionId = await seedCollection({ title: 'Series', published: 1 })
+    const group = await env.DB.prepare(
+      `INSERT INTO groups (collection_id, name, meta_json) VALUES (?, 'Folder', '{"character":"카루네 시에 (하츠네 미쿠 ver. 세균오염)"}')`
+    ).bind(collectionId).run()
+    const groupId = group.meta.last_row_id
+    const { cookie } = await login()
+
+    const response = await SELF.fetch(`https://example.com/api/groups/${groupId}`, {
+      method: 'PATCH',
+      headers: { cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ series: '보컬로이드, 카루네 시에' }),
+    })
+    expect(response.status).toBe(200)
+
+    const collection = await (await SELF.fetch(`https://example.com/api/collections/${collectionId}`)).json()
+    expect(collection.groups[0].series).toEqual(['보컬로이드', '카루네 시에'])
+  })
+
+  it('backfills series from existing character lines, with a dry run first', async () => {
+    const collectionId = await seedCollection({ title: 'Backfill', published: 1 })
+    await env.DB.prepare(
+      `INSERT INTO groups (collection_id, name, meta_json) VALUES (?, 'A', '{"character":"승리의 여신 : 니케 - 크러스트"}')`
+    ).bind(collectionId).run()
+    await env.DB.prepare(
+      `INSERT INTO groups (collection_id, name, meta_json) VALUES (?, 'B', '{"character":"체인소 맨 - 마키마","series":["체인소 맨"]}')`
+    ).bind(collectionId).run()
+    const { cookie } = await login()
+
+    const preview = await (await SELF.fetch('https://example.com/api/groups/backfill-series?dry_run=1', {
+      method: 'POST', headers: { cookie },
+    })).json()
+    // 이미 series가 있는 폴더는 대상에서 빠집니다.
+    expect(preview.planned).toHaveLength(1)
+    expect(preview.planned[0].series).toEqual(['승리의 여신: 니케'])
+    expect(preview.updated).toBe(0)
+
+    const applied = await (await SELF.fetch('https://example.com/api/groups/backfill-series', {
+      method: 'POST', headers: { cookie },
+    })).json()
+    expect(applied.updated).toBe(1)
+
+    // 두 번 돌려도 더 바뀌지 않아야 합니다.
+    const again = await (await SELF.fetch('https://example.com/api/groups/backfill-series', {
+      method: 'POST', headers: { cookie },
+    })).json()
+    expect(again.updated).toBe(0)
+  })
+})
+
+describe('search index', () => {
+  it('groups characters, series, models and collections for public search', async () => {
+    const collectionId = await seedCollection({ title: 'acosta!', published: 1 })
+    const draftId = await seedCollection({ title: 'Draft event', published: 0 })
+    const group = await env.DB.prepare(
+      `INSERT INTO groups (collection_id, name, meta_json) VALUES (?, '냉수', '{"twitter":["ice"],"character":"승리의 여신 : 니케 - 크러스트","series":["승리의 여신: 니케"]}')`
+    ).bind(collectionId).run()
+    await env.DB.prepare('INSERT INTO photos (collection_id, group_id, key_large, key_thumb) VALUES (?, ?, ?, ?)')
+      .bind(collectionId, group.meta.last_row_id, 'idx-l', 'idx-t').run()
+    // 비공개 컬렉션의 폴더는 방문자 색인에 나오지 않아야 합니다.
+    const hidden = await env.DB.prepare(
+      `INSERT INTO groups (collection_id, name, meta_json) VALUES (?, '비밀', '{"character":"체인소 맨 - 마키마"}')`
+    ).bind(draftId).run()
+    await env.DB.prepare('INSERT INTO photos (collection_id, group_id, key_large, key_thumb) VALUES (?, ?, ?, ?)')
+      .bind(draftId, hidden.meta.last_row_id, 'hid-l', 'hid-t').run()
+
+    const index = await (await SELF.fetch('https://example.com/api/search-index')).json()
+    expect(index.series.map((s) => s.name)).toEqual(['승리의 여신: 니케'])
+    expect(index.characters[0]).toMatchObject({
+      character: '승리의 여신 : 니케 - 크러스트',
+      series: ['승리의 여신: 니케'],
+      photo_count: 1,
+      collection_title: 'acosta!',
+    })
+    expect(index.models[0]).toMatchObject({ handle: 'ice', photo_count: 1 })
+    expect(index.collections.map((c) => c.title)).toEqual(['acosta!'])
+
+    // 관리자는 초안까지 봅니다.
+    const { cookie } = await login()
+    const asAdmin = await (await SELF.fetch('https://example.com/api/search-index', { headers: { cookie } })).json()
+    expect(asAdmin.series.map((s) => s.name).sort()).toEqual(['승리의 여신: 니케', '체인소 맨'])
+  })
+})
+
+describe('search aliases and series cover', () => {
+  it('finds a collection by its Korean nickname through the search index', async () => {
+    const collectionId = await seedCollection({ title: 'Comic World', published: 1 })
+    const { cookie } = await login()
+
+    // 쉼표로 여러 통칭을 한 번에 등록
+    const added = await SELF.fetch('https://example.com/api/search-aliases', {
+      method: 'POST',
+      headers: { cookie, 'Content-Type': 'application/json' },
+      // 행사 별칭은 이름 기준입니다(같은 이름의 다른 회차도 함께 적용).
+      body: JSON.stringify({ kind: 'collection', target: 'Comic World', alias: '서코, 부코, 코믹월드' }),
+    })
+    expect((await added.json()).added).toBe(3)
+
+    const index = await (await SELF.fetch('https://example.com/api/search-index')).json()
+    const target = index.collections.find((c) => c.id === collectionId)
+    expect(target.aliases.sort()).toEqual(['부코', '서코', '코믹월드'])
+
+    // 삭제
+    const removed = await SELF.fetch(
+      `https://example.com/api/search-aliases?kind=collection&target=${encodeURIComponent('Comic World')}&alias=${encodeURIComponent('부코')}`,
+      { method: 'DELETE', headers: { cookie } })
+    expect(removed.status).toBe(200)
+    const after = await (await SELF.fetch('https://example.com/api/search-index')).json()
+    expect(after.collections.find((c) => c.id === collectionId).aliases.sort()).toEqual(['서코', '코믹월드'])
+  })
+
+  it('rejects an unknown alias kind', async () => {
+    const { cookie } = await login()
+    const response = await SELF.fetch('https://example.com/api/search-aliases', {
+      method: 'POST',
+      headers: { cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'nonsense', target: '1', alias: 'x' }),
+    })
+    expect(response.status).toBe(400)
+  })
+
+  it('uses the chosen cover photo for a series and falls back when cleared', async () => {
+    const collectionId = await seedCollection({ title: 'Cover test', published: 1 })
+    const group = await env.DB.prepare(
+      `INSERT INTO groups (collection_id, name, meta_json) VALUES (?, 'A', '{"character":"체인소 맨 - 마키마","series":["체인소 맨"]}')`
+    ).bind(collectionId).run()
+    const gid = group.meta.last_row_id
+    const first = await env.DB.prepare('INSERT INTO photos (collection_id, group_id, key_large, key_thumb, sort_order) VALUES (?, ?, ?, ?, 0)')
+      .bind(collectionId, gid, 'cov-l-1', 'cov-t-1').run()
+    const second = await env.DB.prepare('INSERT INTO photos (collection_id, group_id, key_large, key_thumb, sort_order) VALUES (?, ?, ?, ?, 1)')
+      .bind(collectionId, gid, 'cov-l-2', 'cov-t-2').run()
+    const { cookie } = await login()
+
+    // 지정 전에는 표시 순서상 첫 사진
+    let data = await (await SELF.fetch('https://example.com/api/characters')).json()
+    expect(data.series.find((s) => s.name === '체인소 맨').thumb).toBe('cov-t-1')
+
+    await SELF.fetch('https://example.com/api/series-cover', {
+      method: 'PUT',
+      headers: { cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: '체인소 맨', photo_id: second.meta.last_row_id }),
+    })
+    data = await (await SELF.fetch('https://example.com/api/characters')).json()
+    const withCover = data.series.find((s) => s.name === '체인소 맨')
+    expect(withCover.thumb).toBe('cov-t-2')
+    expect(withCover.cover_set).toBe(true)
+
+    // 해제하면 다시 첫 사진으로
+    await SELF.fetch('https://example.com/api/series-cover', {
+      method: 'PUT',
+      headers: { cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: '체인소 맨', photo_id: null }),
+    })
+    data = await (await SELF.fetch('https://example.com/api/characters')).json()
+    expect(data.series.find((s) => s.name === '체인소 맨').thumb).toBe('cov-t-1')
+    expect(first.meta.last_row_id).toBeTruthy()
+  })
+})
+
+describe('collection aliases apply to every event with the same name', () => {
+  it('shares one alias across same-titled collections', async () => {
+    const may = await seedCollection({ title: 'Comic World', published: 1 })
+    const july = await seedCollection({ title: 'Comic World', published: 1 })
+    const other = await seedCollection({ title: 'PlayX4', published: 1 })
+    await env.DB.prepare('UPDATE collections SET date = ? WHERE id = ?').bind('2026-05', may).run()
+    await env.DB.prepare('UPDATE collections SET date = ? WHERE id = ?').bind('2026-07', july).run()
+    const { cookie } = await login()
+
+    // 이름 기준으로 한 번만 등록
+    await SELF.fetch('https://example.com/api/search-aliases', {
+      method: 'POST',
+      headers: { cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'collection', target: 'Comic World', alias: '서코, 부코' }),
+    })
+
+    const index = await (await SELF.fetch('https://example.com/api/search-index')).json()
+    const comicWorlds = index.collections.filter((c) => c.title === 'Comic World')
+    expect(comicWorlds).toHaveLength(2)
+    // 회차가 달라도 둘 다 같은 검색어를 갖습니다.
+    for (const col of comicWorlds) expect(col.aliases.sort()).toEqual(['부코', '서코'])
+    // 다른 행사에는 번지지 않습니다.
+    expect(index.collections.find((c) => c.id === other).aliases).toEqual([])
   })
 })

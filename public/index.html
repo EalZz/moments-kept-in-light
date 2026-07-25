@@ -23,15 +23,44 @@
   <header class="nav">
     <div class="nav-inner">
       <a class="wordmark" href="#/" data-site-name>KANEZ</a>
-      <button class="nav-toggle" aria-label="메뉴" aria-expanded="false"><span></span><span></span></button>
+      <div class="nav-right">
+        <button class="search-toggle" aria-label="검색" aria-expanded="false">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+            <circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 L21 21"/>
+          </svg>
+        </button>
+        <button class="nav-toggle" aria-label="메뉴" aria-expanded="false"><span></span><span></span></button>
+      </div>
       <nav class="nav-links">
         <a href="#/" data-scroll="#collections">Collections</a>
         <a href="#/photos">Photos</a>
         <a href="#/models">Models</a>
+        <a href="#/characters">Characters</a>
         <a href="#/about">About</a>
       </nav>
     </div>
   </header>
+
+  <div class="search-scrim" id="searchScrim" aria-hidden="true"></div>
+  <div class="search-panel" id="searchPanel" role="dialog" aria-modal="true" aria-label="검색">
+    <div class="search-inner">
+      <div class="search-bar">
+        <span class="search-ic" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7">
+            <circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 L21 21"/>
+          </svg>
+        </span>
+        <input id="searchInput" type="search" autocomplete="off" spellcheck="false"
+               placeholder="모델 · 캐릭터 · 작품 · 행사명" aria-label="검색어" />
+        <button class="search-esc" id="searchClose">ESC</button>
+      </div>
+      <div class="search-results" id="searchResults" role="listbox" aria-label="검색 결과"></div>
+      <div class="search-hint">
+        <span>↑↓ 이동</span><span>↵ 열기</span><span>ESC 닫기</span>
+        <span class="spacer">/ 키로 언제든 검색</span>
+      </div>
+    </div>
+  </div>
 
   <main class="wrap" id="main"></main>
 

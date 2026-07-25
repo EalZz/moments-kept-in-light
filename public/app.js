@@ -153,6 +153,193 @@ function setupIntro(isHome) {
   }
 }
 
+// ---------- 통합 검색 ----------
+// 색인을 한 번 받아 클라이언트에서 즉시 필터링합니다(입력마다 서버 왕복 없음).
+// 결과는 작품 → 캐릭터 → 모델 → 행사 순으로 묶어 보여줍니다.
+const searchPanel = document.getElementById('searchPanel')
+const searchScrim = document.getElementById('searchScrim')
+const searchInput = document.getElementById('searchInput')
+const searchResults = document.getElementById('searchResults')
+const searchToggle = document.querySelector('.search-toggle')
+let searchIndex = null
+let searchRows = []      // 표시 중인 결과(키보드 이동 대상)
+let searchCursor = -1
+let searchLoading = false
+
+function highlight(text, query) {
+  const value = String(text ?? '')
+  if (!query) return esc(value)
+  const at = value.toLowerCase().indexOf(query)
+  if (at < 0) return esc(value)
+  return esc(value.slice(0, at)) + '<mark>' + esc(value.slice(at, at + query.length)) + '</mark>' + esc(value.slice(at + query.length))
+}
+
+async function ensureSearchIndex() {
+  if (searchIndex || searchLoading) return
+  searchLoading = true
+  try {
+    searchIndex = await api('/search-index')
+  } catch (e) {
+    console.error('search index failed', e)
+  } finally {
+    searchLoading = false
+  }
+}
+
+// 검색어에 맞는 항목을 그룹별로 모읍니다. 각 항목은 이동할 해시(href)를 갖습니다.
+function searchMatches(query) {
+  if (!searchIndex) return []
+  const q = query.trim().toLowerCase()
+  if (!q) return []
+  // 별칭(서코·플엑 등)도 함께 봅니다. 배열이 들어오면 각 항목을 검사합니다.
+  const has = (...fields) => fields.flat().some((f) => String(f ?? '').toLowerCase().includes(q))
+  const groups = []
+
+  const series = searchIndex.series.filter((s) => has(s.name, s.aliases || [])).slice(0, 6)
+  if (series.length) {
+    groups.push({ label: 'Series', items: series.map((s) => ({
+      href: '#/photos', // 작품 전용 페이지가 생기면 여기를 바꿉니다
+      thumb: s.thumb, circ: false,
+      name: highlight(s.name, q),
+      sub: `캐릭터 ${s.character_count}명`,
+      count: `${s.photo_count}장`,
+    })) })
+  }
+
+  const characters = searchIndex.characters
+    .filter((ch) => has(ch.character, ch.series || []))
+    .slice(0, 8)
+  if (characters.length) {
+    groups.push({ label: 'Characters', items: characters.map((ch) => ({
+      href: '#/c/' + ch.collection_id + (ch.group_id ? '/g' + ch.group_id : ''),
+      thumb: ch.thumb, circ: false,
+      name: highlight(ch.character, q),
+      sub: [(ch.series || []).join(', '), ch.collection_title].filter(Boolean).join(' · '),
+      count: `${ch.photo_count}장`,
+    })) })
+  }
+
+  const models = searchIndex.models.filter((m) => has(m.name, m.handle, m.aliases || [])).slice(0, 6)
+  if (models.length) {
+    groups.push({ label: 'Models', items: models.map((m) => ({
+      href: '#/m/' + encodeURIComponent(m.handle),
+      thumb: m.thumb, circ: true,
+      name: highlight(m.name, q),
+      sub: '@' + m.handle,
+      count: `${m.photo_count}장`,
+    })) })
+  }
+
+  const collections = searchIndex.collections.filter((c) => has(c.title, c.date, c.aliases || [])).slice(0, 6)
+  if (collections.length) {
+    groups.push({ label: 'Collections', items: collections.map((c) => ({
+      href: '#/c/' + c.id,
+      thumb: c.thumb, circ: false,
+      name: highlight(c.title, q),
+      sub: c.date || '',
+      count: `${c.photo_count}장`,
+    })) })
+  }
+  return groups
+}
+
+function renderSearchResults() {
+  const query = searchInput.value
+  if (!query.trim()) {
+    searchResults.innerHTML = '<div class="search-empty">모델 이름·캐릭터·작품·행사명으로 찾아보세요.</div>'
+    searchRows = []
+    searchCursor = -1
+    return
+  }
+  const groups = searchMatches(query)
+  if (!groups.length) {
+    searchResults.innerHTML = `<div class="search-empty">‘${esc(query.trim())}’에 맞는 결과가 없습니다.</div>`
+    searchRows = []
+    searchCursor = -1
+    return
+  }
+  searchResults.innerHTML = groups.map((g) => `
+    <div class="search-group">${esc(g.label)} · ${g.items.length}</div>
+    ${g.items.map((it) => `
+      <button type="button" class="search-row" role="option" data-href="${esc(it.href)}">
+        ${it.thumb ? `<img class="th${it.circ ? ' circ' : ''}" src="/img/${esc(it.thumb)}" alt="" loading="lazy" />`
+                   : `<span class="th${it.circ ? ' circ' : ''}"></span>`}
+        <span class="t"><span class="n">${it.name}</span>${it.sub ? `<span class="s">${esc(it.sub)}</span>` : ''}</span>
+        <span class="cnt">${esc(it.count)}</span>
+      </button>`).join('')}`).join('')
+  searchRows = [...searchResults.querySelectorAll('.search-row')]
+  searchCursor = searchRows.length ? 0 : -1
+  paintSearchCursor()
+}
+
+function paintSearchCursor() {
+  searchRows.forEach((row, i) => {
+    const on = i === searchCursor
+    row.classList.toggle('on', on)
+    row.setAttribute('aria-selected', on ? 'true' : 'false')
+  })
+  if (searchCursor >= 0) searchRows[searchCursor].scrollIntoView({ block: 'nearest' })
+}
+
+function moveSearchCursor(step) {
+  if (!searchRows.length) return
+  searchCursor = (searchCursor + step + searchRows.length) % searchRows.length
+  paintSearchCursor()
+}
+
+let searchPreviousFocus = null
+function openSearch() {
+  if (document.body.classList.contains('search-open')) return
+  searchPreviousFocus = document.activeElement
+  // 패널이 내비 바로 아래에서 시작하도록 실제 내비 높이를 알려줍니다.
+  const navEl = document.querySelector('.nav')
+  if (navEl) document.documentElement.style.setProperty('--nav-h', navEl.offsetHeight + 'px')
+  document.body.classList.add('search-open')
+  searchToggle?.setAttribute('aria-expanded', 'true')
+  renderSearchResults()
+  // 즉시 한 번, 전환이 시작된 뒤 한 번 더 — 환경에 따라 첫 시도가 무시될 수 있습니다.
+  const focusField = () => { searchInput.focus(); searchInput.select() }
+  focusField()
+  requestAnimationFrame(focusField)
+  ensureSearchIndex().then(() => { if (document.body.classList.contains('search-open')) renderSearchResults() })
+}
+function closeSearch() {
+  if (!document.body.classList.contains('search-open')) return
+  document.body.classList.remove('search-open')
+  searchToggle?.setAttribute('aria-expanded', 'false')
+  if (searchPreviousFocus && document.contains(searchPreviousFocus)) searchPreviousFocus.focus()
+}
+
+if (searchToggle) {
+  searchToggle.addEventListener('click', () => {
+    if (document.body.classList.contains('search-open')) closeSearch()
+    else openSearch()
+  })
+  document.getElementById('searchClose').addEventListener('click', closeSearch)
+  searchScrim.addEventListener('click', closeSearch)
+  searchInput.addEventListener('input', renderSearchResults)
+  searchInput.addEventListener('keydown', (ev) => {
+    if (ev.key === 'ArrowDown') { ev.preventDefault(); moveSearchCursor(1) }
+    else if (ev.key === 'ArrowUp') { ev.preventDefault(); moveSearchCursor(-1) }
+    else if (ev.key === 'Enter' && searchCursor >= 0) { ev.preventDefault(); searchRows[searchCursor].click() }
+  })
+  searchResults.addEventListener('click', (ev) => {
+    const row = ev.target.closest('.search-row')
+    if (!row) return
+    closeSearch()
+    location.hash = row.dataset.href
+  })
+  // 전역 단축키: '/' 로 열기, ESC 로 닫기 (입력 중일 때는 방해하지 않음)
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape' && document.body.classList.contains('search-open')) return closeSearch()
+    if (ev.key !== '/' || ev.metaKey || ev.ctrlKey || ev.altKey) return
+    const tag = document.activeElement?.tagName
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return
+    ev.preventDefault()
+    openSearch()
+  })
+}
+
 // 모바일 햄버거 메뉴 토글
 const navToggle = document.querySelector('.nav-toggle')
 const navLinks = document.querySelector('.nav-links')
@@ -190,11 +377,19 @@ function featureHref(p) {
   return '#/c/' + p.collection_id + (p.group_id ? '/g' + p.group_id : '')
 }
 
+// 모델 표기 규칙: 닉네임이 주, 계정(@핸들)은 작게 보조로.
+// 여러 명이면 닉네임은 &, 계정은 , 로 구분합니다.
+function modelCreditHtml(p) {
+  const handles = p.models || []
+  if (!handles.length) return ''
+  const names = handles.map((handle, index) => (p.model_names || [])[index])
+  const accounts = `<span class="handle">${handles.map((h) => '@' + esc(h)).join(', ')}</span>`
+  if (!names.every(Boolean)) return accounts
+  return `${names.map(esc).join(' &amp; ')} ${accounts}`
+}
+// 스크린리더·alt용 평문
 function modelCreditText(p) {
-  return (p.models || []).map((handle, index) => {
-    const name = (p.model_names || [])[index]
-    return [name, '@' + handle].filter(Boolean).join(' ')
-  }).join(' · ')
+  return (p.models || []).map((handle, index) => (p.model_names || [])[index] || '@' + handle).join(' & ')
 }
 
 // 스크린리더·검색엔진용 사진 설명. 폴더 크레딧이 붙은 사진은 모델·캐릭터까지 담습니다.
@@ -224,7 +419,7 @@ function startRandomFeature(deck) {
     info.classList.add('swap') // 페이드아웃
     setTimeout(() => {
       link.querySelector('.name').textContent = p.title
-      link.querySelector('.models').textContent = modelCreditText(p)
+      link.querySelector('.models').innerHTML = modelCreditHtml(p)
       link.querySelector('.character').textContent = p.character || ''
       info.classList.remove('swap') // 페이드인
     }, 420)
@@ -417,7 +612,7 @@ async function renderHome() {
       <div class="feature-info">
         <div class="label">Gallery</div>
         <div class="name">${esc(p.title)}</div>
-        <div class="date models">${esc(modelCreditText(p))}</div>
+        <div class="date models">${modelCreditHtml(p)}</div>
         <div class="character">${esc(p.character || '')}</div>
       </div>
     </a>`
@@ -425,7 +620,10 @@ async function renderHome() {
 
   const grid = visible.length ? `
     <section id="collections">
-      <div class="sec-kicker"><span>Collections</span><a class="n" href="#/photos">전체 사진 →</a></div>
+      <div class="col-head">
+        <h2>Collections</h2>
+        <div class="date">${visible.length} collections · <a href="#/photos">All photos →</a></div>
+      </div>
       <div class="collections"></div>
     </section>` : '<div class="empty">아직 게시된 사진이 없습니다</div>'
 
@@ -539,7 +737,7 @@ async function renderCollection(id, focusGroup = null) {
           ? `<a href="#/m/${esc(s.handles[0])}" title="이 모델 사진 모아보기">${esc(s.name)}</a>`
           : esc(s.name)}</h3>
         ${s.handles.length || s.character ? `<div class="group-credit">${s.handles.map((h) =>
-          `<a href="https://x.com/${esc(h)}" target="_blank" rel="noopener">@${esc(h)} ↗</a>`).join(' ')}${
+          `<a href="https://x.com/${esc(h)}" target="_blank" rel="noopener">@${esc(h)} ↗</a>`).join(', ')}${
           s.character ? `<span class="chr">${esc(s.character)}</span>` : ''}</div>` : ''}
         <div class="jgrid"></div>
       </section>`
@@ -834,8 +1032,188 @@ window.addEventListener('scroll', async () => {
 })
 
 // ---------- 모델 아카이브 ----------
+// ---------- 캐릭터 아카이브 (작품 → 캐릭터 → 사진) ----------
+// 작품이 늘어나면 전부 펼치는 대신 작품 단위로 먼저 훑고, 고른 작품의 캐릭터만 봅니다.
+const SERIES_SORTS = {
+  name: { label: '가나다 순', apply: (list) => [...list].sort((a, b) => a.name.localeCompare(b.name, 'ko')) },
+  photos: { label: '사진 많은 순', apply: (list) => [...list].sort((a, b) => b.photo_count - a.photo_count) },
+}
+const seriesSort = () => (SERIES_SORTS[localStorage.getItem('pht-series-sort')] ? localStorage.getItem('pht-series-sort') : 'name')
+const seriesView = () => (localStorage.getItem('pht-series-view') === 'list' ? 'list' : 'grid')
+
+// 작품명이 캐릭터명 앞에 붙어 있으면 카드에서는 떼고 보여줍니다(제목 중복 방지).
+function shortCharacterName(character, seriesName) {
+  if (!seriesName || character === seriesName) return character
+  const escaped = seriesName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s*:\s*/g, '\\s*:\\s*')
+  return character.replace(new RegExp('^' + escaped + '\\s*[-–—]\\s*'), '') || character
+}
+
+function seriesHref(name) { return '#/s/' + encodeURIComponent(name) }
+
+async function renderCharacters() {
+  const data = await api('/characters')
+  const sortKey = seriesSort()
+  const view = seriesView()
+  const list = SERIES_SORTS[sortKey].apply(data.series)
+
+  const gridCard = (s) => `
+    <a class="model-card" href="${seriesHref(s.name)}">
+      <div class="cover">${s.thumb ? `<img src="/img/${esc(s.thumb)}" alt="${esc(s.name)}" loading="lazy" data-fade />` : ''}</div>
+      <div class="meta">
+        <div class="title">${esc(s.name || '작품 미지정')}</div>
+        <div class="info">${s.characters.length} characters · ${s.photo_count} photos</div>
+      </div>
+    </a>`
+  // 목록 보기: 작품마다 제목을 두고 그 아래에 캐릭터 카드를 펼칩니다.
+  const characterCard = (ch, seriesName) => `
+    <a class="model-card" href="#/ch/${encodeURIComponent(ch.character)}">
+      <div class="cover">${ch.thumb ? `<img src="/img/${esc(ch.thumb)}" alt="${esc(ch.character)}" loading="lazy" data-fade />` : ''}</div>
+      <div class="meta">
+        <div class="title">${esc(shortCharacterName(ch.character, seriesName))}</div>
+        <div class="info">${ch.photo_count} photos${ch.model_names.filter(Boolean).length ? ' · ' + esc(ch.model_names.filter(Boolean).join(', ')) : ''}</div>
+      </div>
+    </a>`
+  const listSection = (s) => {
+    // 작품이 곧 캐릭터인 경우(장르 없는 캐릭터)는 제목을 겹쳐 쓰지 않습니다.
+    const soloSelf = s.characters.length === 1 && s.characters[0].character === s.name
+    return `<section class="series-sec">
+      ${soloSelf ? '' : `<h3 class="series-head">
+        <a href="${seriesHref(s.name)}">${esc(s.name || '작품 미지정')}</a>
+        <span>${s.characters.length} character${s.characters.length > 1 ? 's' : ''} · ${s.photo_count} photos</span></h3>`}
+      <div class="models-grid">${s.characters.map((ch) => characterCard(ch, s.name)).join('')}</div>
+    </section>`
+  }
+
+  main.innerHTML = `
+    <div class="col-head">
+      <a class="back" href="#/">← Home</a>
+      <h2>Characters</h2>
+      <div class="date">${data.character_count} characters · ${data.series_count} series</div>
+      <div class="head-tools">
+        <div class="view-toggle">
+          ${Object.entries(SERIES_SORTS).map(([key, s]) =>
+            `<button data-sort="${key}" class="${key === sortKey ? 'on' : ''}">${esc(s.label)}</button>`).join('')}
+        </div>
+        <div class="view-mode">
+          <button data-view="grid" class="${view === 'grid' ? 'on' : ''}" aria-label="작품만 그리드로 보기" title="작품만 보기">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+              <rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/>
+              <rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/>
+            </svg>
+          </button>
+          <button data-view="list" class="${view === 'list' ? 'on' : ''}" aria-label="캐릭터까지 펼쳐 보기" title="캐릭터까지 펼쳐 보기">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+              <rect x="3" y="4" width="18" height="2.4" rx="1.2"/><rect x="3" y="11" width="18" height="2.4" rx="1.2"/>
+              <rect x="3" y="18" width="18" height="2.4" rx="1.2"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+    ${list.length
+      ? (view === 'grid'
+          ? `<div class="models-grid">${list.map(gridCard).join('')}</div>`
+          : list.map(listSection).join(''))
+      : '<div class="empty">캐릭터가 등록된 폴더가 아직 없습니다</div>'}`
+
+  main.querySelectorAll('[data-sort]').forEach((b) =>
+    b.addEventListener('click', () => { localStorage.setItem('pht-series-sort', b.dataset.sort); renderCharacters() }))
+  main.querySelectorAll('[data-view]').forEach((b) =>
+    b.addEventListener('click', () => { localStorage.setItem('pht-series-view', b.dataset.view); renderCharacters() }))
+}
+
+// 작품 상세: 그 작품의 캐릭터 카드들
+async function renderSeries(name) {
+  const data = await api('/characters')
+  const series = data.series.find((s) => s.name === name)
+  if (!series) {
+    main.innerHTML = '<div class="col-head"><a class="back" href="#/characters">← Characters</a><h2>작품을 찾지 못했습니다</h2></div>'
+    return
+  }
+  main.innerHTML = `
+    <div class="col-head">
+      <a class="back" href="#/characters">← Characters</a>
+      <h2>${esc(series.name || '작품 미지정')}</h2>
+      <div class="date">${series.characters.length} characters · ${series.photo_count} photos</div>
+    </div>
+    <div class="models-grid">${series.characters.map((ch) => `
+      <a class="model-card" href="#/ch/${encodeURIComponent(ch.character)}">
+        <div class="cover">${ch.thumb ? `<img src="/img/${esc(ch.thumb)}" alt="${esc(ch.character)}" loading="lazy" data-fade />` : ''}</div>
+        <div class="meta">
+          <div class="title">${esc(shortCharacterName(ch.character, series.name))}</div>
+          <div class="info">${ch.photo_count} photos${ch.model_names.filter(Boolean).length ? ' · ' + esc(ch.model_names.filter(Boolean).join(', ')) : ''}</div>
+        </div>
+      </a>`).join('')}</div>`
+}
+
+// 캐릭터 상세: 행사별 섹션 (모델 상세와 같은 구성)
+async function renderCharacter(name) {
+  const ch = await api('/characters/' + encodeURIComponent(name))
+  for (const s of ch.sections) {
+    s.photos.forEach((p) => {
+      if (s.handles.length) p._models = s.handles
+      if (s.handles.length) p._modelNames = s.model_names || []
+      p._character = s.character
+      p._event = s.title
+    })
+  }
+  // 같은 캐릭터를 여러 모델이 한 경우가 있으므로 모델 기준으로 묶습니다.
+  // (한 폴더에 여러 모델이 함께 있으면 그 조합을 하나의 묶음으로 봅니다)
+  const byModel = new Map()
+  for (const s of ch.sections) {
+    const key = s.handles.length ? s.handles.join(',') : ''
+    const bucket = byModel.get(key) || {
+      handles: s.handles,
+      names: (s.model_names || []).map((n, i) => n || '@' + s.handles[i]),
+      events: [],
+      photos: [],
+    }
+    if (!bucket.events.includes(s.title)) bucket.events.push(s.title)
+    bucket.photos.push(...s.photos)
+    byModel.set(key, bucket)
+  }
+  const groups = [...byModel.values()].sort((a, b) => b.photos.length - a.photos.length)
+  const flat = groups.flatMap((g) => g.photos)
+
+  jSets = []
+  let offset = 0
+  const blocks = groups.map((g) => {
+    jSets.push({ photos: g.photos, offset })
+    offset += g.photos.length
+    // 닉네임이 제목, 계정은 아래 보조줄로 작게
+    const title = g.handles.length
+      ? g.handles.map((h, i) => `<a href="#/m/${encodeURIComponent(h)}">${esc(g.names[i])}</a>`).join(' &amp; ')
+      : '모델 미지정'
+    const accounts = g.handles.length
+      ? `<span class="handle">${g.handles.map((h) => '@' + esc(h)).join(', ')}</span>`
+      : ''
+    return `
+      <section class="group-sec">
+        <h3 class="group-name">${title}</h3>
+        <div class="group-credit">${accounts}${accounts ? ' · ' : ''}${esc(g.events.join(' · '))} · ${g.photos.length}장</div>
+        <div class="jgrid"></div>
+      </section>`
+  })
+
+  main.innerHTML = `
+    <div class="col-head">
+      <a class="back" href="${ch.series.length ? seriesHref(ch.series[0]) : '#/characters'}">← ${esc(ch.series[0] || 'Characters')}</a>
+      <h2>${esc(ch.character)}</h2>
+      <div class="date">${groups.length > 1 ? `${groups.length} models · ` : ''}${ch.photo_count} photos</div>
+    </div>
+    ${blocks.join('') || '<div class="empty">사진이 없습니다</div>'}`
+  layoutJustifiedAll()
+  main.onclick = (ev) => {
+    const el = ev.target.closest('.ph')
+    if (!el) return
+    current = { photos: flat, index: 0 }
+    openLightbox(+el.dataset.i)
+  }
+}
+
 async function renderModels() {
   const models = await api('/models')
+  models.sort((a, b) => a.name.localeCompare(b.name, 'ko')) // 사람 찾기가 쉬우므로 가나다순 고정
   main.innerHTML = `
     <div class="col-head">
       <a class="back" href="#/">← Home</a>
@@ -928,17 +1306,22 @@ async function route() {
   const isHome = hash === '#/' || hash === ''
   const m = hash.match(/^#\/c\/(\d+)(?:\/g(\d+))?$/)
   const mm = hash.match(/^#\/m\/([A-Za-z0-9_]+)$/)
+  const ch = hash.match(/^#\/ch\/(.+)$/) // 캐릭터명은 한글·괄호를 포함하므로 넓게 받습니다
+  const sr = hash.match(/^#\/s\/(.+)$/)  // 작품(장르) 상세
   // 렌더는 데이터를 받은 뒤에 일어나므로, 그동안 이전 화면이 남아 "뒤로가기가 느린" 느낌을 줍니다.
   // 캐시가 있으면 대개 즉시 끝나니, 조금 지체될 때만 이전 화면을 비워 전환이 시작된 걸 알립니다.
   const showPending = setTimeout(() => {
-    main.innerHTML = '<div class="empty" aria-live="polite">불러오는 중…</div>'
+    main.innerHTML = '<div class="empty" aria-live="polite">Loading…</div>'
   }, 180)
   try {
     if (m) await renderCollection(m[1], m[2] ? +m[2] : null)
     else if (hash === '#/photos') await renderPhotos()
     else if (hash === '#/models') await renderModels()
+    else if (hash === '#/characters') await renderCharacters()
     else if (hash === '#/about') await renderAbout()
     else if (mm) await renderModel(mm[1])
+    else if (ch) await renderCharacter(decodeURIComponent(ch[1]))
+    else if (sr) await renderSeries(decodeURIComponent(sr[1]))
     else await renderHome()
   } catch (e) {
     main.innerHTML = `<div class="empty">불러오지 못했습니다</div>`
@@ -968,6 +1351,7 @@ function updateNavActive() {
     }
   } else if (hash.startsWith('#/photos')) key = '#/photos'
   else if (hash.startsWith('#/models') || /^#\/m\//.test(hash)) key = '#/models'
+  else if (hash.startsWith('#/characters') || /^#\/ch\//.test(hash) || /^#\/s\//.test(hash)) key = '#/characters'
   else if (hash.startsWith('#/about')) key = '#/about'
   else if (/^#\/c\//.test(hash)) key = '#collections'
   document.querySelectorAll('.nav-links a').forEach((a) => {

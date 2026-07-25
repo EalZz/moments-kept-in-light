@@ -121,7 +121,26 @@
     .move-option { display: flex; align-items: center; gap: 10px; padding: 11px 12px; border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
     .move-option:hover { border-color: var(--fg-dim); background: rgba(255,255,255,.025); }
     .move-option input { width: auto; margin: 0; }
-    @media (max-width: 720px) { .topbar { align-items: flex-start; gap: 12px; } .topbar .r { justify-content: flex-end; } }
+    /* 작품·검색어 관리 */
+    .series-mgr-item { display: flex; align-items: center; gap: 14px; padding: 12px 4px 6px; }
+    .series-mgr-item img { width: 56px; height: 56px; object-fit: cover; border-radius: 3px; background: var(--bg); }
+    .series-mgr-item .ph-placeholder { width: 56px; height: 56px; border-radius: 3px; background: var(--bg); }
+    .series-mgr-item .title { font-size: 14px; }
+    .series-mgr-item .info { font-size: 12px; color: var(--fg-faint); }
+    .alias-item { display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap; padding: 8px 4px 14px; border-bottom: 1px solid var(--border); }
+    .alias-item .t { flex: 1; min-width: 240px; }
+    .alias-item .title { font-size: 13px; }
+    .alias-item .info { font-size: 11px; color: var(--fg-faint); margin-top: 2px; }
+    .alias-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .alias-chip { font-size: 11px; padding: 3px 9px; border-radius: 999px; border-color: var(--border); color: var(--fg-dim); }
+    .alias-chip:hover { color: #e07070; border-color: #4a2a2a; }
+    .alias-add { display: flex; gap: 6px; align-items: flex-start; }
+    .alias-add input { width: 240px; font-size: 12px; padding: 6px 10px; }
+    .alias-add button { font-size: 11px; padding: 6px 11px; white-space: nowrap; }
+    @media (max-width: 720px) {
+      .topbar { align-items: flex-start; gap: 12px; } .topbar .r { justify-content: flex-end; }
+      .alias-add { width: 100%; } .alias-add input { width: 100%; }
+    }
   </style>
 </head>
 <body>

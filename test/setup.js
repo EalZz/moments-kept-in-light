@@ -13,6 +13,8 @@ beforeEach(async () => {
     env.DB.prepare('DELETE FROM site_daily_views'),
     env.DB.prepare('DELETE FROM login_attempts'),
     env.DB.prepare('DELETE FROM admin_sessions'),
+    env.DB.prepare('DELETE FROM search_aliases'),
+    env.DB.prepare('DELETE FROM series_meta'),
   ])
   let cursor
   do {

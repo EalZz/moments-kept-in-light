@@ -9,6 +9,13 @@
   --accent: #b8a98c;                      /* 절제된 웜뉴트럴 악센트 (호버/활성) */
   --radius: 4px;
   --font-display: "Cormorant Garamond", "Noto Serif KR", serif;
+
+  /* 글래스 표면 — 내비·모바일 메뉴·검색 패널이 모두 같은 값을 씁니다.
+     블러가 실제로 보이도록 배경을 충분히 투명하게 두고(0.62), 그만큼 강하게 흐려
+     뒤 사진의 형태가 남지 않게 합니다. 형태가 남으면 글씨가 뭉개져 보입니다. */
+  --glass-bg: rgba(12, 12, 15, 0.62);
+  --glass-blur: blur(26px) saturate(150%);
+  --glass-line: 1px solid rgba(255, 255, 255, 0.08);
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html { color-scheme: dark; scrollbar-gutter: stable; } /* 스크롤바 공간 항상 예약 → overflow 토글 시 좌우 밀림 방지 */
@@ -183,19 +190,26 @@ body.intro-on .frame .rail { opacity: 0; }
   position: fixed;
   top: 0; left: 0; right: 0;
   z-index: 50;
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  background: rgba(11, 11, 13, 0.7);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: var(--glass-line);
+}
+/* 유리 표면을 가상요소로 분리합니다.
+   .nav 자체에 backdrop-filter를 주면 자식(모바일 드롭다운)의 블러가 무효화되기 때문입니다. */
+.nav::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  background: var(--glass-bg);
 }
 .nav-inner {
   position: relative;
+  z-index: 1;
   max-width: 1200px;
   margin: 0 auto;
   padding: 16px 28px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 20px;
 }
 .wordmark {
@@ -204,8 +218,24 @@ body.intro-on .frame .rail { opacity: 0; }
   font-weight: 600;
   letter-spacing: 0.32em;
   text-transform: uppercase;
+  margin-right: auto; /* 워드마크만 왼쪽, 링크·검색은 오른쪽으로 */
 }
-.nav-links { display: flex; gap: 26px; }
+/* 링크 다음에 검색 아이콘이 오도록 (DOM 순서와 무관하게) */
+.nav-links { display: flex; gap: 26px; order: 1; }
+.nav-right { display: flex; align-items: center; gap: 14px; order: 2; }
+.search-toggle {
+  display: grid;
+  place-items: center;
+  width: 30px; height: 30px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--fg-dim);
+  cursor: pointer;
+  transition: color 0.2s ease;
+}
+.search-toggle:hover, .search-toggle[aria-expanded="true"] { color: var(--fg); }
+.search-toggle:focus-visible { outline: 1px solid var(--fg-dim); outline-offset: 2px; }
 .nav-links a {
   font-size: 12px;
   letter-spacing: 0.14em;
@@ -247,15 +277,110 @@ body.nav-open .nav-toggle span:last-child { transform: translateY(-3.75px) rotat
   .nav-links {
     position: absolute; top: 100%; left: 0; right: 0;
     flex-direction: column; align-items: flex-end; gap: 0;
-    background: rgba(11, 11, 13, 0.96);
-    backdrop-filter: blur(14px);
-    border-bottom: 1px solid var(--border);
+    /* 내비 바와 같은 유리 효과 (.nav의 블러는 ::before로 분리해 두었습니다) */
+    background: var(--glass-bg);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    border-bottom: var(--glass-line);
+    box-shadow: 0 16px 34px rgba(0, 0, 0, 0.45);
     padding: 8px 20px 16px;
     opacity: 0; visibility: hidden; transform: translateY(-8px);
     transition: opacity 0.25s ease, transform 0.25s ease, visibility 0.25s;
   }
   body.nav-open .nav-links { opacity: 1; visibility: visible; transform: none; }
   .nav-links a { font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase; padding: 12px 0; }
+}
+
+/* ---------- 통합 검색 (내비 아래로 내려오는 패널) ---------- */
+.search-panel {
+  position: fixed;
+  top: var(--nav-h, 62px); left: 0; right: 0;
+  z-index: 60;
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border-bottom: var(--glass-line);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.5);
+  transform: translateY(-12px);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.22s ease, transform 0.22s ease, visibility 0.22s;
+}
+body.search-open .search-panel { opacity: 1; visibility: visible; transform: none; }
+/* 패널 뒤 페이지를 살짝 어둡게 — 맥락은 남기고 초점은 검색에 */
+.search-scrim {
+  position: fixed; inset: 0;
+  /* 내비(50)·패널(60)보다 아래. 페이지만 어둡게 덮어 글래스 뒤 배경을 균일하게 만듭니다.
+     그래야 블러 위 글씨가 또렷하게 읽힙니다. */
+  z-index: 46;
+  background: rgba(6, 6, 8, 0.66);
+  opacity: 0; visibility: hidden;
+  transition: opacity 0.22s ease, visibility 0.22s;
+}
+body.search-open .search-scrim { opacity: 1; visibility: visible; }
+body.search-open { overflow: hidden; } /* 패널 열린 동안 배경 스크롤 잠금 */
+/* 검색 중에는 스크림이 뒤 페이지를 덮어 글래스 뒤가 차분해집니다. */
+.search-inner { max-width: 1200px; margin: 0 auto; padding: 0 28px; }
+.search-bar {
+  display: flex; align-items: center; gap: 14px;
+  padding: 24px 0 14px;
+  border-bottom: 1px solid var(--border);
+}
+.search-bar .search-ic { color: var(--fg-faint); display: grid; place-items: center; }
+.search-bar input {
+  flex: 1;
+  background: none; border: none; padding: 0;
+  color: var(--fg);
+  font-family: var(--font-display);
+  font-size: clamp(1.4rem, 3.4vw, 1.95rem);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+.search-bar input:focus { outline: none; }
+.search-bar input::placeholder { color: var(--fg-faint); }
+.search-esc {
+  font-size: 10px; letter-spacing: 0.14em; color: var(--fg-faint);
+  border: 1px solid var(--border); border-radius: 3px; padding: 5px 8px;
+  background: none; cursor: pointer;
+}
+.search-esc:hover { color: var(--fg-dim); border-color: var(--fg-dim); }
+.search-results { max-height: min(62vh, 560px); overflow-y: auto; padding: 6px 0 18px; }
+.search-group {
+  padding: 16px 0 4px;
+  font-size: 10px; letter-spacing: 0.24em; text-transform: uppercase; color: var(--fg-faint);
+}
+.search-row {
+  display: flex; align-items: center; gap: 14px; width: 100%;
+  padding: 10px 12px;
+  border: none; border-radius: 5px;
+  background: none; color: inherit; text-align: left;
+  font: inherit; cursor: pointer;
+}
+.search-row.on { background: rgba(255, 255, 255, 0.045); box-shadow: inset 0 0 0 1px var(--hairline); }
+.search-row .th {
+  width: 44px; height: 44px; flex: none;
+  border-radius: 3px; object-fit: cover;
+  background: var(--bg-soft); box-shadow: inset 0 0 0 1px var(--hairline);
+}
+.search-row .th.circ { border-radius: 50%; }
+.search-row .t { flex: 1; min-width: 0; }
+.search-row .t .n { display: block; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-row .t .s { display: block; font-size: 11.5px; color: var(--fg-faint); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-row .cnt { font-size: 11px; color: var(--fg-dim); letter-spacing: 0.04em; flex: none; }
+.search-row mark { background: none; color: var(--accent); }
+.search-empty { padding: 26px 12px; font-size: 13px; color: var(--fg-faint); }
+.search-hint {
+  display: flex; gap: 18px;
+  padding: 11px 0 14px;
+  border-top: 1px solid var(--border);
+  font-size: 10.5px; letter-spacing: 0.06em; color: var(--fg-faint);
+}
+.search-hint .spacer { margin-left: auto; }
+@media (max-width: 640px) {
+  .search-inner { padding: 0 20px; }
+  .search-bar { padding: 18px 0 12px; }
+  .search-results { max-height: 66vh; }
+  .search-hint { display: none; } /* 모바일은 키보드 안내가 필요 없음 */
 }
 
 main.wrap { padding-top: 76px; }
@@ -511,7 +636,14 @@ main.wrap { padding-top: 76px; }
   font-size: clamp(2.2rem, 5vw, 3.6rem);
   font-weight: 500;
   line-height: 1.1;
+  /* 각 페이지 제목은 대문자 + 자간을 넓혀 구분감을 줍니다 */
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
+.col-head .date a { color: inherit; transition: color 0.2s; }
+.col-head .date a:hover { color: var(--fg); }
+/* 홈의 Collections 제목은 히어로 바로 아래라 위쪽 여백을 조금 더 줍니다 */
+#collections .col-head { padding: 96px 0 52px; }
 .col-head .date {
   font-size: 11px;
   color: var(--fg-faint);
@@ -613,6 +745,9 @@ main.wrap { padding-top: 76px; }
   text-align: center;
   margin-bottom: 28px;
 }
+/* 캐릭터 상세에서는 모델 이름이 링크입니다 */
+.group-name a { color: inherit; }
+.group-name a:hover { color: var(--fg-dim); }
 .group-name::before, .group-name::after {
   content: '';
   display: inline-block;
@@ -621,6 +756,12 @@ main.wrap { padding-top: 76px; }
   background: var(--border);
   vertical-align: middle;
   margin: 0 18px;
+}
+/* 모델 계정(@핸들)은 닉네임보다 작고 흐리게 — 어디서든 닉네임이 주가 되게 */
+.handle {
+  font-size: 0.85em;
+  color: var(--fg-faint);
+  letter-spacing: 0.04em;
 }
 .group-credit {
   text-align: center;
@@ -739,6 +880,77 @@ main.wrap { padding-top: 76px; }
   padding-bottom: 110px;
 }
 @media (max-width: 560px) { .models-grid { grid-template-columns: repeat(2, 1fr); gap: 14px; } }
+
+/* 정렬·보기 토글을 한 줄에 (Characters 페이지) */
+/* 정렬 칩은 가운데, 보기 전환은 오른쪽 끝에 작은 아이콘으로 */
+.head-tools {
+  position: relative;
+  display: flex; align-items: center; justify-content: center;
+  margin-top: 24px;
+}
+.head-tools .view-toggle { margin-top: 0; }
+.view-mode {
+  position: absolute; right: 0; top: 50%; transform: translateY(-50%);
+  display: flex; gap: 2px;
+}
+.view-mode button {
+  display: grid; place-items: center;
+  width: 30px; height: 30px; padding: 0;
+  border: none; background: none;
+  color: var(--fg-faint);
+  transition: color 0.2s ease;
+}
+.view-mode button:hover { color: var(--fg-dim); }
+.view-mode button.on { color: var(--fg); }
+@media (max-width: 640px) {
+  .head-tools { flex-direction: column; gap: 12px; }
+  .view-mode { position: static; transform: none; justify-content: center; }
+}
+
+/* 작품 목록 보기 */
+.series-list { display: grid; gap: 2px; padding-bottom: 40px; }
+.series-row {
+  display: flex; align-items: center; gap: 14px;
+  padding: 12px 14px;
+  border-radius: 5px;
+  border-bottom: 1px solid var(--border);
+}
+.series-row:hover { background: rgba(255, 255, 255, 0.03); }
+.series-row .th {
+  width: 46px; height: 46px; flex: none;
+  border-radius: 3px; object-fit: cover;
+  background: var(--bg-soft); box-shadow: inset 0 0 0 1px var(--hairline);
+}
+.series-row .t { flex: 1; min-width: 0; }
+.series-row .t .n { display: block; font-size: 14px; }
+.series-row .t .s {
+  display: block; font-size: 11.5px; color: var(--fg-faint); margin-top: 3px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.series-row .cnt { font-size: 11px; color: var(--fg-dim); letter-spacing: 0.04em; flex: none; }
+@media (max-width: 640px) {
+  .series-row { padding: 11px 6px; gap: 12px; }
+  .series-row .th { width: 40px; height: 40px; }
+}
+
+/* 작품별 캐릭터 묶음 (Characters 페이지) */
+.series-sec { padding-bottom: 30px; }
+.series-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 14px;
+  font-family: var(--font-display);
+  font-size: 20px; font-weight: 600; letter-spacing: 0.02em;
+  padding: 22px 0 12px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 18px;
+}
+.series-head a { color: inherit; }
+.series-head a:hover { color: var(--fg-dim); }
+.series-head span {
+  font-family: -apple-system, "Apple SD Gothic Neo", sans-serif;
+  font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--fg-faint); white-space: nowrap;
+}
+@media (max-width: 640px) { .series-head { font-size: 17px; padding-top: 16px; } }
 .model-card .cover {
   box-shadow: inset 0 0 0 1px var(--hairline);
   aspect-ratio: 4 / 5;
