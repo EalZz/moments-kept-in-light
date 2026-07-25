@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { env, SELF } from 'cloudflare:test'
-import { persistUpload } from '../src/worker.js'
+import { persistUpload, runScheduledCleanup, trashRetentionDays } from '../src/worker.js'
 
 async function login(password = 'test-password') {
   const response = await SELF.fetch('https://example.com/api/login', {
@@ -387,5 +387,182 @@ describe('uploads', () => {
       insertPhoto: async () => { throw new Error('db failed') },
     })).rejects.toThrow('db failed')
     expect(deleted).toEqual(['large', 'thumb'])
+  })
+})
+
+describe('bulk photo operations', () => {
+  it('soft-deletes many photos in one request and reassigns the cover', async () => {
+    const collectionId = await seedCollection({ title: 'Bulk', published: 1 })
+    const ids = []
+    for (let i = 0; i < 3; i++) {
+      const row = await env.DB.prepare(
+        'INSERT INTO photos (collection_id, key_large, key_thumb, sort_order) VALUES (?, ?, ?, ?)'
+      ).bind(collectionId, `bulk-l-${i}`, `bulk-t-${i}`, i).run()
+      ids.push(row.meta.last_row_id)
+    }
+    await env.DB.prepare('UPDATE collections SET cover_photo_id = ? WHERE id = ?').bind(ids[0], collectionId).run()
+    const { cookie } = await login()
+
+    const response = await SELF.fetch('https://example.com/api/photos/bulk-delete', {
+      method: 'POST',
+      headers: { cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [ids[0], ids[1]] }),
+    })
+    expect(response.status).toBe(200)
+    expect((await response.json()).deleted).toBe(2)
+
+    const remaining = await env.DB.prepare('SELECT COUNT(*) AS n FROM photos WHERE collection_id = ? AND deleted_at IS NULL')
+      .bind(collectionId).first()
+    expect(remaining.n).toBe(1)
+    // 대표였던 사진이 지워졌으므로 남은 사진으로 옮겨져야 합니다.
+    const col = await env.DB.prepare('SELECT cover_photo_id FROM collections WHERE id = ?').bind(collectionId).first()
+    expect(col.cover_photo_id).toBe(ids[2])
+  })
+
+  it('moves many photos into a folder and rejects a folder from another collection', async () => {
+    const collectionId = await seedCollection({ title: 'Move source' })
+    const otherId = await seedCollection({ title: 'Move other' })
+    const group = await env.DB.prepare('INSERT INTO groups (collection_id, name) VALUES (?, ?)')
+      .bind(collectionId, 'Folder').run()
+    const foreignGroup = await env.DB.prepare('INSERT INTO groups (collection_id, name) VALUES (?, ?)')
+      .bind(otherId, 'Foreign').run()
+    const ids = []
+    for (let i = 0; i < 2; i++) {
+      const row = await env.DB.prepare('INSERT INTO photos (collection_id, key_large, key_thumb) VALUES (?, ?, ?)')
+        .bind(collectionId, `mv-l-${i}`, `mv-t-${i}`).run()
+      ids.push(row.meta.last_row_id)
+    }
+    const { cookie } = await login()
+
+    const ok = await SELF.fetch('https://example.com/api/photos/bulk-move', {
+      method: 'POST',
+      headers: { cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids, group_id: group.meta.last_row_id }),
+    })
+    expect(ok.status).toBe(200)
+    const moved = await env.DB.prepare('SELECT COUNT(*) AS n FROM photos WHERE group_id = ?')
+      .bind(group.meta.last_row_id).first()
+    expect(moved.n).toBe(2)
+
+    const rejected = await SELF.fetch('https://example.com/api/photos/bulk-move', {
+      method: 'POST',
+      headers: { cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids, group_id: foreignGroup.meta.last_row_id }),
+    })
+    expect(rejected.status).toBe(400)
+  })
+})
+
+describe('sort order writes', () => {
+  it('stores the given order and ignores ids from another collection', async () => {
+    const collectionId = await seedCollection({ title: 'Order' })
+    const otherId = await seedCollection({ title: 'Order other' })
+    const ids = []
+    for (let i = 0; i < 3; i++) {
+      const row = await env.DB.prepare('INSERT INTO photos (collection_id, key_large, key_thumb) VALUES (?, ?, ?)')
+        .bind(collectionId, `ord-l-${i}`, `ord-t-${i}`).run()
+      ids.push(row.meta.last_row_id)
+    }
+    const foreign = await env.DB.prepare('INSERT INTO photos (collection_id, key_large, key_thumb) VALUES (?, ?, ?)')
+      .bind(otherId, 'foreign-l', 'foreign-t').run()
+    const { cookie } = await login()
+
+    const reversed = [...ids].reverse()
+    const response = await SELF.fetch(`https://example.com/api/collections/${collectionId}/photo-order`, {
+      method: 'PUT',
+      headers: { cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [...reversed, foreign.meta.last_row_id] }),
+    })
+    expect(response.status).toBe(200)
+
+    const { results } = await env.DB.prepare('SELECT id, sort_order FROM photos WHERE collection_id = ? ORDER BY sort_order')
+      .bind(collectionId).all()
+    expect(results.map((r) => r.id)).toEqual(reversed)
+    // 다른 컬렉션 사진은 소유권 검사에 걸려 변경되지 않아야 합니다.
+    const untouched = await env.DB.prepare('SELECT sort_order FROM photos WHERE id = ?').bind(foreign.meta.last_row_id).first()
+    expect(untouched.sort_order).toBeNull()
+  })
+
+  it('rejects a malformed id list', async () => {
+    const collectionId = await seedCollection({ title: 'Order invalid' })
+    const { cookie } = await login()
+    const response = await SELF.fetch(`https://example.com/api/collections/${collectionId}/photo-order`, {
+      method: 'PUT',
+      headers: { cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: ['abc'] }),
+    })
+    expect(response.status).toBe(400)
+  })
+})
+
+describe('image serving', () => {
+  it('caches published images long-term and answers revalidation with 304', async () => {
+    const collectionId = await seedCollection({ title: 'Cache', published: 1 })
+    await env.PHOTOS.put('p/cache/pic-l.webp', 'binary-data')
+    await env.DB.prepare('INSERT INTO photos (collection_id, key_large, key_thumb) VALUES (?, ?, ?)')
+      .bind(collectionId, 'p/cache/pic-l.webp', 'p/cache/pic-t.webp').run()
+
+    const first = await SELF.fetch('https://example.com/img/p/cache/pic-l.webp')
+    expect(first.status).toBe(200)
+    expect(first.headers.get('cache-control')).toContain('max-age=2592000')
+    const etag = first.headers.get('etag')
+    expect(etag).toBeTruthy()
+
+    const revalidated = await SELF.fetch('https://example.com/img/p/cache/pic-l.webp', {
+      headers: { 'If-None-Match': etag },
+    })
+    expect(revalidated.status).toBe(304)
+    expect(await revalidated.text()).toBe('')
+  })
+
+  it('never caches images from unpublished collections', async () => {
+    const collectionId = await seedCollection({ title: 'Draft cache', published: 0 })
+    await env.PHOTOS.put('p/draft/pic-l.webp', 'binary-data')
+    await env.DB.prepare('INSERT INTO photos (collection_id, key_large, key_thumb) VALUES (?, ?, ?)')
+      .bind(collectionId, 'p/draft/pic-l.webp', 'p/draft/pic-t.webp').run()
+
+    expect((await SELF.fetch('https://example.com/img/p/draft/pic-l.webp')).status).toBe(404)
+    const { cookie } = await login()
+    const asAdmin = await SELF.fetch('https://example.com/img/p/draft/pic-l.webp', { headers: { cookie } })
+    expect(asAdmin.status).toBe(200)
+    expect(asAdmin.headers.get('cache-control')).toBe('private, no-store')
+  })
+})
+
+describe('scheduled cleanup', () => {
+  it('purges expired sessions and trash past the retention window', async () => {
+    const staleDate = new Date(Date.now() - (trashRetentionDays() + 1) * 24 * 60 * 60 * 1000).toISOString()
+    const freshDate = new Date().toISOString()
+
+    await env.DB.prepare('INSERT INTO admin_sessions (id, expires_at) VALUES (?, ?)')
+      .bind('expired-session', Date.now() - 1000).run()
+    await env.DB.prepare('INSERT INTO admin_sessions (id, expires_at) VALUES (?, ?)')
+      .bind('live-session', Date.now() + 60_000).run()
+
+    // 보관기한이 지난 사진과, 아직 남아 있어야 하는 사진
+    const collectionId = await seedCollection({ title: 'Retention', published: 1 })
+    await env.PHOTOS.put('p/old/gone-l.webp', 'data')
+    await env.DB.prepare('INSERT INTO photos (collection_id, key_large, key_thumb, deleted_at) VALUES (?, ?, ?, ?)')
+      .bind(collectionId, 'p/old/gone-l.webp', 'p/old/gone-t.webp', staleDate).run()
+    await env.DB.prepare('INSERT INTO photos (collection_id, key_large, key_thumb, deleted_at) VALUES (?, ?, ?, ?)')
+      .bind(collectionId, 'p/new/keep-l.webp', 'p/new/keep-t.webp', freshDate).run()
+    // 보관기한이 지난 컬렉션 (사진까지 함께 사라져야 함)
+    const staleCollectionId = await seedCollection({ title: 'Old collection', deletedAt: staleDate })
+    await env.DB.prepare('INSERT INTO photos (collection_id, key_large, key_thumb) VALUES (?, ?, ?)')
+      .bind(staleCollectionId, 'p/oldcol/l.webp', 'p/oldcol/t.webp').run()
+
+    const summary = await runScheduledCleanup(env)
+
+    expect(summary.sessions).toBe(1)
+    expect(summary.photos).toBe(1)
+    expect(summary.collections).toBe(1)
+    expect(await env.DB.prepare('SELECT id FROM admin_sessions WHERE id = ?').bind('live-session').first()).toBeTruthy()
+    expect(await env.DB.prepare('SELECT id FROM admin_sessions WHERE id = ?').bind('expired-session').first()).toBeNull()
+    // 기한 지난 사진의 R2 객체까지 지워졌는지
+    expect(await env.PHOTOS.get('p/old/gone-l.webp')).toBeNull()
+    // 최근 삭제된 사진은 휴지통에 남아 복구할 수 있어야 합니다.
+    const kept = await env.DB.prepare('SELECT id FROM photos WHERE key_large = ?').bind('p/new/keep-l.webp').first()
+    expect(kept).toBeTruthy()
+    expect(await env.DB.prepare('SELECT id FROM collections WHERE id = ?').bind(staleCollectionId).first()).toBeNull()
   })
 })

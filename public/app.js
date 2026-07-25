@@ -197,6 +197,12 @@ function modelCreditText(p) {
   }).join(' · ')
 }
 
+// 스크린리더·검색엔진용 사진 설명. 폴더 크레딧이 붙은 사진은 모델·캐릭터까지 담습니다.
+function photoAltText(p) {
+  const models = (p._modelNames || []).filter(Boolean).join(', ') || (p._models || []).join(', ')
+  return [p._event || p.title, models, p._character || p.character].filter(Boolean).join(' · ')
+}
+
 // 랜덤 모드: 전체 사진 셔플 순환, 한 바퀴 돌기 전엔 반복 없음. 캡션은 행사명 + 모델(+캐릭터)
 // 스와이프/드래그로 수동 넘기기 가능, 캡션은 페이드 전환
 function startRandomFeature(deck) {
@@ -240,7 +246,7 @@ function startRandomFeature(deck) {
       idx = (idx - 1 + deck.length) % deck.length
     }
     const p = deck[idx]
-    back.src = '/img/' + p.key_large
+    back.src = '/img/' + (p.key_medium || p.key_large)
     let swapped = false
     const swap = () => {
       if (swapped) return
@@ -295,7 +301,7 @@ async function startFeatureRotation(colId, coverKey) {
   const holder = document.querySelector('.feature-img')
   if (!holder) return
   const col = await api('/collections/' + colId)
-  const keys = col.photos.map((p) => p.key_large)
+  const keys = col.photos.map((p) => p.key_medium || p.key_large)
   if (keys.length < 2) return
   let i = Math.max(0, keys.indexOf(coverKey))
   const imgA = holder.querySelector('img')
@@ -321,7 +327,7 @@ function cardHtml(c) {
   return `
     <a class="card" href="#/c/${c.id}">
       <div class="cover" ${c.cover_w && c.cover_h ? `style="aspect-ratio:${c.cover_w}/${c.cover_h}"` : ''}>
-        <img src="/img/${esc(c.cover_large || c.cover_thumb)}" alt="${esc(c.title)}" loading="lazy" data-fade />
+        <img src="/img/${esc(c.cover_medium || c.cover_large || c.cover_thumb)}" alt="${esc(c.title)}" loading="lazy" data-fade />
       </div>
       ${(c.preview_thumbs || []).length ? `<div class="strip">
         ${c.preview_thumbs.map((k, i) => {
@@ -393,7 +399,7 @@ async function renderHome() {
     // 지정 모드: 컬렉션 정보 패널
     cover = `
     <a class="feature" href="#/c/${featured.id}">
-      <div class="feature-img"><img src="/img/${esc(featured.cover_large)}" alt="${esc(featured.title)}" /></div>
+      <div class="feature-img"><img src="/img/${esc(featured.cover_medium || featured.cover_large)}" alt="${esc(featured.title)}" fetchpriority="high" /></div>
       <div class="feature-info">
         <div class="label">Featured Collection</div>
         <div class="name">${esc(featured.title)}</div>
@@ -407,7 +413,7 @@ async function renderHome() {
     const p = deck[0]
     cover = `
     <a class="feature" id="featureLink" href="${featureHref(p)}">
-      <div class="feature-img"><img src="/img/${esc(p.key_large)}" alt="${esc(p.title)}" /></div>
+      <div class="feature-img"><img src="/img/${esc(p.key_medium || p.key_large)}" alt="${esc(p.title)}" fetchpriority="high" /></div>
       <div class="feature-info">
         <div class="label">Gallery</div>
         <div class="name">${esc(p.title)}</div>
@@ -440,7 +446,7 @@ async function renderHome() {
   main.innerHTML = hero + '<div class="below-hero">' + cover + grid + teaser + '</div>'
   homeCollections = visible
   layoutCollections(true)
-  if (featured && featured.cover_large) startFeatureRotation(featured.id, featured.cover_large)
+  if (featured && featured.cover_large) startFeatureRotation(featured.id, featured.cover_medium || featured.cover_large)
   else if (deck) startRandomFeature(deck)
 }
 
@@ -471,9 +477,9 @@ function justifiedHtml(photos, offset, containerW) {
     // 마지막 줄이 많이 비면 확대하지 않고 빈 공간으로 채움 (사진이 과하게 커지는 것 방지)
     const fill = last && sum < threshold * 0.65 ? threshold - sum : 0
     return `<div class="jrow">${row.map(({ p, i }) => `
-      <div class="ph" data-i="${i}" style="flex-grow:${aspectOf(p).toFixed(4)}; aspect-ratio:${p.width || 3}/${p.height || 4}">
-        <img src="/img/${esc(p.key_thumb)}" loading="lazy" data-fade />
-      </div>`).join('')}${fill ? `<div class="jfill" style="flex-grow:${fill.toFixed(4)}"></div>` : ''}</div>`
+      <button type="button" class="ph" data-i="${i}" aria-label="${esc(photoAltText(p) || '사진')} 크게 보기" style="flex-grow:${aspectOf(p).toFixed(4)}; aspect-ratio:${p.width || 3}/${p.height || 4}">
+        <img src="/img/${esc(p.key_thumb)}" alt="${esc(photoAltText(p))}" loading="lazy" data-fade />
+      </button>`).join('')}${fill ? `<div class="jfill" style="flex-grow:${fill.toFixed(4)}"></div>` : ''}</div>`
   }).join('')
 }
 
@@ -515,6 +521,8 @@ async function renderCollection(id, focusGroup = null) {
   }
   // 라이트박스용 사진 목록: 표시 순서 그대로 하나로 이어붙임 (폴더가 달라져도 계속 넘어감)
   const flat = [...ungrouped, ...sections.flatMap((s) => s.photos)]
+  // 행사명은 alt 텍스트와 라이트박스 설명에 쓰입니다(Photos 페이지와 같은 형태로 맞춤).
+  for (const p of flat) p._event = col.title
   // 섹션별 justified 그리드 데이터 (.jgrid 순서와 1:1)
   jSets = []
   let offset = 0
@@ -621,8 +629,12 @@ function exifLine(p) {
 
 function openLightbox(i) {
   current.index = i
+  const opener = document.activeElement // 닫은 뒤 이 사진으로 포커스를 되돌립니다.
   const box = document.createElement('div')
   box.className = 'lightbox'
+  box.setAttribute('role', 'dialog')
+  box.setAttribute('aria-modal', 'true')
+  box.setAttribute('aria-label', '사진 크게 보기')
   box.innerHTML = `
     <span class="count"></span>
     <div class="image-stage">
@@ -716,10 +728,30 @@ function openLightbox(i) {
     current.index = (current.index + d + current.photos.length) % current.photos.length
     show(d)
   }
-  const close = () => {
+  // 히스토리 항목을 하나 밀어넣어 모바일 뒤로가기가 사이트를 떠나지 않고 라이트박스만 닫게 합니다.
+  // URL은 그대로 두므로 해시 라우터가 다시 렌더하지 않습니다.
+  let historyPushed = false
+  try {
+    history.pushState({ lightbox: true }, '', location.href)
+    historyPushed = true
+  } catch { /* pushState를 못 쓰는 환경에서는 기존 동작 유지 */ }
+
+  let closed = false
+  const teardown = () => {
+    if (closed) return
+    closed = true
     document.removeEventListener('keydown', onKey)
+    window.removeEventListener('popstate', onPopState)
     document.body.style.overflow = ''
     box.remove()
+    if (opener && document.contains(opener)) opener.focus()
+  }
+  const onPopState = () => teardown() // 뒤로가기: 이미 항목이 소비됐으므로 정리만 합니다.
+  // 버튼·Escape로 닫을 때는 우리가 넣은 히스토리 항목을 되감아 뒤로가기 횟수가 늘지 않게 합니다.
+  const close = () => {
+    if (closed) return
+    if (historyPushed && history.state?.lightbox) history.back()
+    else teardown()
   }
   const onKey = (ev) => {
     if (ev.key === 'Escape') close()
@@ -727,10 +759,12 @@ function openLightbox(i) {
     else if (ev.key === 'ArrowRight') move(1)
   }
   document.addEventListener('keydown', onKey)
+  window.addEventListener('popstate', onPopState)
   box.querySelector('.prev').addEventListener('click', () => move(-1))
   box.querySelector('.next').addEventListener('click', () => move(1))
   box.querySelector('.close').addEventListener('click', close)
   box.addEventListener('click', (ev) => { if (ev.target === box) close() })
+  box.querySelector('.close').focus() // 포커스를 모달 안으로 옮깁니다.
 
   // 터치 스와이프: 좌우 = 이전/다음, 아래로 크게 = 닫기
   let touchX = 0, touchY = 0
@@ -825,6 +859,7 @@ async function renderModel(handle) {
       // 합동 폴더에서 다른 모델 핸들엔 이 페이지 모델의 이름을 붙이지 않음
       if (s.handles.length) p._modelNames = s.handles.map((h) => h.toLowerCase() === handle.toLowerCase() ? m.name : '')
       if (s.character) p._character = s.character
+      p._event = s.title // 다른 페이지와 동일하게 행사명 표시
     })
   }
   jSets = []

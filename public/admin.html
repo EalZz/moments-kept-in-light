@@ -26,6 +26,10 @@
     .dropzone { border: 2px dashed var(--border); border-radius: 8px; padding: 48px 24px; text-align: center; color: var(--fg-faint); font-size: 13px; letter-spacing: 0.05em; cursor: pointer; transition: border-color .2s, color .2s; }
     .dropzone.drag { border-color: var(--fg-dim); color: var(--fg-dim); }
     .upload-status { font-size: 12px; color: var(--fg-dim); margin-top: 12px; }
+    .upload-progress { height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; margin-bottom: 8px; }
+    .upload-progress-bar { height: 100%; width: 0; background: var(--fg-dim); transition: width .2s ease; }
+    .upload-progress-text { margin-bottom: 8px; }
+    .upload-status .cancelUploads { font-size: 11px; padding: 3px 9px; }
     .upload-fail-list { margin: 8px 0 10px 18px; color: #d89090; }
     .upload-fail-list li { margin: 3px 0; }
     .admin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; margin-top: 20px; }

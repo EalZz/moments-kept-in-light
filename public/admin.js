@@ -60,6 +60,28 @@ async function downloadBackup() {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000)
 }
 
+// 예전 사진에는 medium(1280) 변형이 없습니다. large를 받아 브라우저에서 축소해 채웁니다.
+async function backfillMediumVariants(onProgress) {
+  let filled = 0
+  for (;;) {
+    const { photos, remaining } = await api('/photos/missing-medium?limit=50')
+    if (!photos.length) return { filled, remaining: 0 }
+    onProgress?.(filled, filled + remaining)
+    for (const photo of photos) {
+      const res = await fetch('/img/' + photo.key_large)
+      if (!res.ok) throw new Error(`원본을 읽지 못했습니다 (사진 ${photo.id})`)
+      const bmp = await createImageBitmap(await res.blob(), { imageOrientation: 'from-image' })
+      const medium = await scaleTo(bmp, MEDIUM_MAX, 'image/webp', 0.82)
+      bmp.close()
+      const form = new FormData()
+      form.append('medium', medium.blob, 'm.webp')
+      await api(`/photos/${photo.id}/medium`, { method: 'POST', body: form })
+      filled++
+      onProgress?.(filled, filled + remaining)
+    }
+  }
+}
+
 async function createPhotoBackup() {
   let result = await api('/backups', { method: 'POST' })
   while (!result.done) result = await api(`/backups/${result.id}/run`, { method: 'POST' })
@@ -118,6 +140,8 @@ async function boot() {
 
 // ---------- collections list ----------
 async function renderCollections() {
+  selectedPhotos.clear() // 목록으로 나가면 사진 선택은 유지하지 않습니다.
+  selectionCollectionId = null
   const [allCols, stats] = await Promise.all([api('/collections'), api('/stats')])
   const cols = allCols.filter((c) => !c.deleted_at)
   const daily = stats.daily || []
@@ -131,6 +155,7 @@ async function renderCollections() {
         <button class="admin-menu-toggle" aria-expanded="false" aria-haspopup="menu">관리 메뉴 ⋯</button>
         <div class="admin-menu-popup" role="menu" hidden>
           <button id="backupBtn">메타데이터 백업</button>
+          <button id="mediumBackfillBtn">중간 크기 채우기</button>
           <button id="photoBackupBtn">사진 원본 백업</button>
           <button id="photoRestoreBtn">최근 원본 복원</button>
           <button id="photoBackupDeleteBtn">스냅샷 삭제</button>
@@ -188,6 +213,25 @@ async function renderCollections() {
   setupAdminMenu()
   document.getElementById('backupBtn').addEventListener('click', async () => {
     try { await downloadBackup() } catch (e) { alert('백업 다운로드 실패: ' + e.message) }
+  })
+  document.getElementById('mediumBackfillBtn').addEventListener('click', async (event) => {
+    const button = event.currentTarget
+    const { remaining } = await api('/photos/missing-medium?limit=1').catch(() => ({ remaining: 0 }))
+    if (!remaining) return alert('모든 사진에 중간 크기가 이미 있습니다.')
+    if (!confirm(`중간 크기가 없는 사진 ${remaining}장을 채웁니다. 브라우저에서 축소하므로 시간이 걸립니다. 계속할까요?`)) return
+    button.disabled = true
+    try {
+      const result = await backfillMediumVariants((filled, total) => {
+        button.textContent = `중간 크기 채우는 중… ${filled}/${total}`
+      })
+      alert(`중간 크기 ${result.filled}장을 채웠습니다.`)
+      renderCollections()
+    } catch (e) {
+      alert('중간 크기 채우기 실패: ' + e.message)
+    } finally {
+      button.disabled = false
+      button.textContent = '중간 크기 채우기'
+    }
   })
   document.getElementById('photoBackupBtn').addEventListener('click', async () => {
     if (!confirm('현재 R2 사진 원본을 스냅샷으로 백업할까요? 사진 수에 따라 시간이 걸릴 수 있습니다.')) return
@@ -319,7 +363,7 @@ function sectionHtml(col, group, photos) {
     <div class="panel section" data-gid="${gid}">
       <div class="sec-head">
         <h3>${group ? '📁 ' + esc(group.name) : '행사 바로 아래'}
-          <span class="muted">${photos.length}장${group && group.meta && group.meta.twitter ? ' · ' + [].concat(group.meta.twitter).map((h) => '@' + esc(h)).join(' ') : ''}${group && group.meta && group.meta.character ? ' · ' + esc(group.meta.character) : ''}</span>
+          <span class="muted"><span class="sec-count">${photos.length}장</span>${group && group.meta && group.meta.twitter ? ' · ' + [].concat(group.meta.twitter).map((h) => '@' + esc(h)).join(' ') : ''}${group && group.meta && group.meta.character ? ' · ' + esc(group.meta.character) : ''}</span>
         </h3>
         ${group ? `<div class="r">
           <button class="grpUp" title="폴더 위로">▲</button>
@@ -485,7 +529,19 @@ function openMoveDialog(title, groups, onMove) {
   overlay.querySelector('input[name="moveTarget"]').focus()
 }
 
+// 관리자 액션은 대부분 컬렉션 화면을 다시 그립니다. 그때 스크롤 위치와 선택 상태를 잃으면
+// 사진 여러 장을 정리할 때마다 맨 위로 튀어 작업이 끊깁니다.
+// 선택 집합은 렌더를 넘어 살아남아야 하므로 모듈 스코프에 두고, 컬렉션이 바뀔 때만 비웁니다.
+const selectedPhotos = new Set()
+let selectionCollectionId = null
+
 async function renderCollection(id) {
+  if (String(selectionCollectionId) !== String(id)) {
+    selectedPhotos.clear()
+    selectionCollectionId = id
+  }
+  // innerHTML 교체 전 위치를 기억해 렌더 후 그대로 되돌립니다.
+  const keepScrollY = app.querySelector('.section') ? window.scrollY : 0
   const [col, settings] = await Promise.all([api('/collections/' + id), api('/settings')])
   const groups = col.groups || []
   const ungrouped = col.photos.filter((p) => !p.group_id)
@@ -644,12 +700,27 @@ async function renderCollection(id) {
     }))
 
   // ---------- 일괄 선택 (체크박스) → 선택 삭제/이동 ----------
-  const sel = new Set()
+  const sel = selectedPhotos
   const bar = document.getElementById('bulkbar')
   const syncBar = () => {
     bar.hidden = sel.size === 0
     bar.querySelector('.bulk-count').textContent = `${sel.size}개 선택`
   }
+  // 사진을 걷어낸 뒤 섹션 머리말의 장수 표시를 다시 계산합니다(재렌더 없이).
+  const updateSectionCounts = () => {
+    app.querySelectorAll('.section').forEach((section) => {
+      const label = section.querySelector('.sec-count')
+      if (label) label.textContent = `${section.querySelectorAll('.admin-ph').length}장`
+    })
+  }
+  // 살아남은 선택 항목을 새로 그려진 카드에 다시 표시하고, 사라진 사진은 선택에서 뺍니다.
+  for (const pid of [...sel]) {
+    const ph = app.querySelector(`.admin-ph[data-id="${pid}"]`)
+    if (ph) ph.classList.add('selected')
+    else sel.delete(pid)
+  }
+  syncBar()
+  if (keepScrollY) window.scrollTo(0, keepScrollY)
   app.querySelectorAll('.selbox').forEach((box) =>
     box.addEventListener('click', (e) => {
       e.stopPropagation()
@@ -664,13 +735,31 @@ async function renderCollection(id) {
   })
   document.getElementById('bulkDel').addEventListener('click', async () => {
     if (!sel.size || !confirm(`선택한 ${sel.size}장을 삭제할까요?`)) return
-    for (const pid of sel) await api('/photos/' + pid, { method: 'DELETE' })
-    renderCollection(id)
+    const ids = [...sel]
+    try {
+      const result = await api('/photos/bulk-delete', { method: 'POST', json: { ids } })
+      // 재렌더 없이 해당 카드만 걷어내 스크롤 위치를 유지합니다.
+      for (const pid of result.ids || ids) {
+        app.querySelector(`.admin-ph[data-id="${pid}"]`)?.remove()
+        sel.delete(pid)
+      }
+      syncBar()
+      updateSectionCounts()
+    } catch (e) {
+      alert('일괄 삭제 실패: ' + e.message)
+      renderCollection(id)
+    }
   })
   document.getElementById('bulkMove').addEventListener('click', async () => {
     if (!sel.size) return
     openMoveDialog(`선택한 ${sel.size}장 이동`, groups, async (groupId) => {
-      for (const pid of sel) await api('/photos/' + pid, { method: 'PATCH', json: { group_id: groupId } })
+      const ids = [...sel]
+      try {
+        await api('/photos/bulk-move', { method: 'POST', json: { ids, group_id: groupId } })
+      } catch (e) {
+        alert('일괄 이동 실패: ' + e.message)
+      }
+      // 이동은 섹션 구성이 바뀌므로 재렌더하되, 스크롤·선택은 renderCollection이 보존합니다.
       renderCollection(id)
     })
   })
@@ -1200,6 +1289,7 @@ async function importTweet(collectionId, groupId, url, status) {
 
 // ---------- client-side resize + EXIF ----------
 const LARGE_MAX = 2048
+const MEDIUM_MAX = 1280
 const THUMB_MAX = 640
 
 function scaleTo(bmp, max, type, quality) {
@@ -1221,15 +1311,18 @@ async function processFile(file) {
 
   const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' })
   const large = await scaleTo(bmp, LARGE_MAX, 'image/webp', 0.85)
+  // 카드·그리드는 표시 폭이 작아 large(2048)를 쓰면 과대합니다. medium이 그 자리를 대신합니다.
+  const medium = await scaleTo(bmp, MEDIUM_MAX, 'image/webp', 0.82)
   const thumb = await scaleTo(bmp, THUMB_MAX, 'image/webp', 0.8)
   bmp.close()
-  return { large, thumb, exif, takenAt }
+  return { large, medium, thumb, exif, takenAt }
 }
 
 async function uploadOne(collectionId, groupId, file) {
-  const { large, thumb, exif, takenAt } = await processFile(file)
+  const { large, medium, thumb, exif, takenAt } = await processFile(file)
   const form = new FormData()
   form.append('large', large.blob, 'l.webp')
+  form.append('medium', medium.blob, 'm.webp')
   form.append('thumb', thumb.blob, 't.webp')
   form.append('width', large.w)
   form.append('height', large.h)
@@ -1239,22 +1332,52 @@ async function uploadOne(collectionId, groupId, file) {
   await api(`/collections/${collectionId}/photos`, { method: 'POST', body: form })
 }
 
+// 동시 업로드 수. 브라우저 리사이즈(CPU)와 전송(네트워크)이 겹치도록 소수만 병렬로 돕니다.
+const UPLOAD_CONCURRENCY = 3
+
 async function uploadFiles(collectionId, groupId, files, status) {
   if (!files.length) return
   activeUploads++
   let done = 0
+  let cancelled = false
   const failed = []
+  const total = files.length
+  status.innerHTML = `
+    <div class="upload-progress"><div class="upload-progress-bar"></div></div>
+    <div class="upload-progress-text"></div>
+    <button type="button" class="cancelUploads">업로드 중단</button>`
+  const bar = status.querySelector('.upload-progress-bar')
+  const text = status.querySelector('.upload-progress-text')
+  status.querySelector('.cancelUploads').addEventListener('click', () => {
+    cancelled = true
+    text.textContent = '남은 업로드를 중단합니다…'
+  })
+  const paint = () => {
+    const finished = done + failed.length
+    bar.style.width = `${Math.round((finished / total) * 100)}%`
+    text.textContent = `업로드 중… ${finished} / ${total}${failed.length ? ` (실패 ${failed.length})` : ''}`
+  }
+  paint()
+
   try {
-    for (const file of files) {
-      status.textContent = `업로드 중… ${done + failed.length + 1} / ${files.length} (${file.name})`
-      try {
-        await uploadOne(collectionId, groupId, file)
-        done++
-      } catch (e) {
-        console.error(file.name, e)
-        failed.push({ file, error: e.message || '업로드 실패' })
+    // 공유 커서를 두고 워커 3개가 각자 다음 파일을 집어가는 방식 (순차 대비 체감 시간 크게 단축)
+    let cursor = 0
+    const worker = async () => {
+      while (!cancelled) {
+        const index = cursor++
+        if (index >= files.length) return
+        const file = files[index]
+        try {
+          await uploadOne(collectionId, groupId, file)
+          done++
+        } catch (e) {
+          console.error(file.name, e)
+          failed.push({ file, error: e.message || '업로드 실패' })
+        }
+        paint()
       }
     }
+    await Promise.all(Array.from({ length: Math.min(UPLOAD_CONCURRENCY, files.length) }, worker))
   } finally {
     activeUploads--
   }
@@ -1265,11 +1388,11 @@ async function uploadFiles(collectionId, groupId, files, status) {
   const nextStatus = sec && sec.querySelector('.upload-status')
   if (!nextStatus) return
   if (!failed.length) {
-    nextStatus.textContent = `완료: ${done}장 업로드`
+    nextStatus.textContent = cancelled ? `중단: ${done}장 업로드됨` : `완료: ${done}장 업로드`
     return
   }
   nextStatus.innerHTML = `
-    <div>완료: ${done}장 업로드, ${failed.length}장 실패</div>
+    <div>${cancelled ? '중단' : '완료'}: ${done}장 업로드, ${failed.length}장 실패</div>
     <ul class="upload-fail-list">${failed.map(({ file, error }) => `<li>${esc(file.name)} — ${esc(error)}</li>`).join('')}</ul>
     <button class="retryUploads">실패 항목 재시도</button>`
   nextStatus.querySelector('.retryUploads').addEventListener('click', () =>

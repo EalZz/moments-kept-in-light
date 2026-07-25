@@ -360,6 +360,11 @@ main.wrap { padding-top: 76px; }
   color: var(--fg-faint);
   margin-top: 12px;
 }
+/* 모델 크레딧은 .date와 스타일을 공유하지만, 계정·이름은 입력한 대소문자를 그대로 보여줍니다. */
+.feature-info .models {
+  text-transform: none;
+  letter-spacing: 0.06em;
+}
 .feature-info .desc {
   font-size: 14px;
   color: var(--fg-dim);
@@ -570,6 +575,12 @@ main.wrap { padding-top: 76px; }
   .jrow { gap: 8px; }
 }
 .jrow .ph {
+  /* button 요소입니다(키보드로 사진 열기). 기본 버튼 외형은 지우고 타일 모양만 남깁니다. */
+  display: block;
+  padding: 0;
+  border: none;
+  font: inherit;
+  color: inherit;
   box-shadow: inset 0 0 0 1px var(--hairline);
   flex-shrink: 1;
   flex-basis: 0;
@@ -579,6 +590,7 @@ main.wrap { padding-top: 76px; }
   border-radius: var(--radius);
   overflow: hidden;
 }
+.jrow .ph:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
 .jrow .ph img {
   width: 100%; height: 100%;
   object-fit: cover;

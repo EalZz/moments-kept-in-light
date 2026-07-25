@@ -12,6 +12,10 @@
     "logs": { "enabled": true, "head_sampling_rate": 1 },
     "traces": { "enabled": true, "head_sampling_rate": 0.01 }
   },
+  // 매일 03:00 KST(18:00 UTC): 만료 세션·오래된 로그인 시도 정리 + 보관기한 지난 휴지통 영구삭제
+  "triggers": {
+    "crons": ["0 18 * * *"]
+  },
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",

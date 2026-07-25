@@ -178,11 +178,12 @@ app.get('/api/collections', async (c) => {
   const includeDrafts = await isAdmin(c)
   const visibility = includeDrafts ? 'col.deleted_at IS NULL' : 'col.deleted_at IS NULL AND col.published = 1'
   const { results } = await c.env.DB.prepare(
-    `SELECT col.*, p.key_thumb AS cover_thumb, p.key_large AS cover_large,
+    `SELECT col.*, p.key_thumb AS cover_thumb, p.key_large AS cover_large, p.key_medium AS cover_medium,
             p.width AS cover_w, p.height AS cover_h, p.group_id AS cover_group,
             (SELECT COUNT(*) FROM photos WHERE collection_id = col.id AND deleted_at IS NULL) AS photo_count,
             (SELECT key_thumb FROM photos WHERE collection_id = col.id AND deleted_at IS NULL ORDER BY (sort_order IS NULL), sort_order, taken_at, id LIMIT 1) AS first_thumb,
             (SELECT key_large FROM photos WHERE collection_id = col.id AND deleted_at IS NULL ORDER BY (sort_order IS NULL), sort_order, taken_at, id LIMIT 1) AS first_large,
+            (SELECT key_medium FROM photos WHERE collection_id = col.id AND deleted_at IS NULL ORDER BY (sort_order IS NULL), sort_order, taken_at, id LIMIT 1) AS first_medium,
             (SELECT width FROM photos WHERE collection_id = col.id AND deleted_at IS NULL ORDER BY (sort_order IS NULL), sort_order, taken_at, id LIMIT 1) AS first_w,
             (SELECT height FROM photos WHERE collection_id = col.id AND deleted_at IS NULL ORDER BY (sort_order IS NULL), sort_order, taken_at, id LIMIT 1) AS first_h
      FROM collections col
@@ -206,6 +207,8 @@ app.get('/api/collections', async (c) => {
   for (const r of results) {
     r.cover_thumb = r.cover_thumb || r.first_thumb
     r.cover_large = r.cover_large || r.first_large
+    // medium이 없는 예전 사진은 large로 폴백합니다.
+    r.cover_medium = r.cover_medium || r.first_medium || r.cover_large
     r.cover_w = r.cover_w || r.first_w
     r.cover_h = r.cover_h || r.first_h
     const pool = (thumbsByCol[r.id] || []).filter((t) => t.key_thumb !== r.cover_thumb)
@@ -263,32 +266,50 @@ app.get('/api/collections/:id', async (c) => {
 })
 
 // ---------- 수동 정렬 저장 ----------
+// id마다 UPDATE 한 문장을 만들면 사진 500장 컬렉션에서 한 번 끌 때 500개 문장이 나갑니다.
+// CASE 한 문장으로 묶고, SQL이 과도하게 길어지지 않게 청크로 나눕니다.
+const ORDER_CHUNK = 200
+function orderStatements(db, table, ids, scope) {
+  const statements = []
+  for (let start = 0; start < ids.length; start += ORDER_CHUNK) {
+    const chunk = ids.slice(start, start + ORDER_CHUNK)
+    const cases = chunk.map(() => 'WHEN ? THEN ?').join(' ')
+    const placeholders = chunk.map(() => '?').join(',')
+    const values = chunk.flatMap((id, i) => [id, start + i])
+    statements.push(db.prepare(
+      `UPDATE ${table} SET sort_order = CASE id ${cases} END
+       WHERE id IN (${placeholders})${scope ? ' AND collection_id = ?' : ''}`
+    ).bind(...values, ...chunk, ...(scope ? [scope] : [])))
+  }
+  return statements
+}
+function parseOrderIds(body) {
+  if (!Array.isArray(body?.ids) || !body.ids.length) return null
+  const ids = body.ids.map((id) => Number(id))
+  return ids.every((id) => Number.isInteger(id) && id > 0) ? ids : null
+}
+
 // 컬렉션 순서: 전체 컬렉션 id를 표시 순서대로 받아 저장
 app.put('/api/collection-order', requireAdmin, async (c) => {
-  const { ids } = await c.req.json()
-  if (!Array.isArray(ids) || !ids.length) return c.json({ error: 'ids required' }, 400)
-  await c.env.DB.batch(ids.map((cid, i) =>
-    c.env.DB.prepare('UPDATE collections SET sort_order = ? WHERE id = ?').bind(i, cid)))
+  const ids = parseOrderIds(await c.req.json())
+  if (!ids) return c.json({ error: 'ids required' }, 400)
+  await c.env.DB.batch(orderStatements(c.env.DB, 'collections', ids, null))
   return c.json({ ok: true })
 })
 
 // 사진 순서: 컬렉션 내 전체 사진 id를 표시 순서대로 받아 저장
 app.put('/api/collections/:id/photo-order', requireAdmin, async (c) => {
-  const { ids } = await c.req.json()
-  if (!Array.isArray(ids) || !ids.length) return c.json({ error: 'ids required' }, 400)
-  await c.env.DB.batch(ids.map((pid, i) =>
-    c.env.DB.prepare('UPDATE photos SET sort_order = ? WHERE id = ? AND collection_id = ?')
-      .bind(i, pid, c.req.param('id'))))
+  const ids = parseOrderIds(await c.req.json())
+  if (!ids) return c.json({ error: 'ids required' }, 400)
+  await c.env.DB.batch(orderStatements(c.env.DB, 'photos', ids, c.req.param('id')))
   return c.json({ ok: true })
 })
 
 // 폴더(사람) 순서
 app.put('/api/collections/:id/group-order', requireAdmin, async (c) => {
-  const { ids } = await c.req.json()
-  if (!Array.isArray(ids) || !ids.length) return c.json({ error: 'ids required' }, 400)
-  await c.env.DB.batch(ids.map((gid, i) =>
-    c.env.DB.prepare('UPDATE groups SET sort_order = ? WHERE id = ? AND collection_id = ?')
-      .bind(i, gid, c.req.param('id'))))
+  const ids = parseOrderIds(await c.req.json())
+  if (!ids) return c.json({ error: 'ids required' }, 400)
+  await c.env.DB.batch(orderStatements(c.env.DB, 'groups', ids, c.req.param('id')))
   return c.json({ ok: true })
 })
 
@@ -378,6 +399,8 @@ app.get('/api/models/:handle', async (c) => {
     `SELECT * FROM photos WHERE deleted_at IS NULL AND group_id IN (${ids.map(() => '?').join(',')})
      ORDER BY (sort_order IS NULL), sort_order, taken_at, id`
   ).bind(...ids).all()
+  // 컬렉션 API와 같은 형태로 맞춥니다. 파싱하지 않으면 라이트박스에서 EXIF가 표시되지 않습니다.
+  for (const p of photos) p.exif = parseJsonObject(p.exif_json)
   const byGroup = {}
   for (const p of photos) (byGroup[p.group_id] ||= []).push(p)
   // 섹션: 컬렉션 표시 순서(최신 우선)대로
@@ -456,7 +479,8 @@ app.get('/api/photos', async (c) => {
   const limit = Math.min(100, +(c.req.query('limit') || 60) || 60)
   const offset = Math.max(0, +(c.req.query('offset') || 0) || 0)
   const { results } = await c.env.DB.prepare(
-    `SELECT p.key_thumb, p.key_large, p.width, p.height, p.collection_id,
+    `SELECT p.key_thumb, p.key_large, p.key_medium, p.width, p.height, p.collection_id,
+            p.taken_at, p.exif_json,
             col.title, g.name AS group_name, g.meta_json AS g_meta
      FROM photos p
      JOIN collections col ON col.id = p.collection_id
@@ -480,6 +504,10 @@ app.get('/api/photos', async (c) => {
       return {
         key_thumb: r.key_thumb,
         key_large: r.key_large,
+        key_medium: r.key_medium || r.key_large,
+        // 라이트박스가 다른 페이지와 같은 정보를 보여주도록 EXIF·촬영일도 함께 반환합니다.
+        taken_at: r.taken_at,
+        exif: parseJsonObject(r.exif_json),
         width: r.width,
         height: r.height,
         collection_id: r.collection_id,
@@ -493,15 +521,19 @@ app.get('/api/photos', async (c) => {
 })
 
 // 홈 랜덤 슬라이드용: 전체 사진 + 행사명 + 모델 크레딧
+// 메인 랜덤 슬라이드용 표본. 전체 카탈로그를 내려보내면 사진이 늘수록 홈 첫 화면이 무거워집니다.
+const FEATURE_SAMPLE_SIZE = 40
+
 app.get('/api/feature-photos', async (c) => {
   const includeDrafts = await isAdmin(c)
   const { results } = await c.env.DB.prepare(
-    `SELECT p.key_large, p.collection_id, p.group_id, col.title, g.name AS group_name, g.meta_json AS g_meta
+    `SELECT p.key_large, p.key_medium, p.collection_id, p.group_id, col.title, g.name AS group_name, g.meta_json AS g_meta
      FROM photos p
      JOIN collections col ON col.id = p.collection_id
      LEFT JOIN groups g ON g.id = p.group_id
-     WHERE p.deleted_at IS NULL AND col.deleted_at IS NULL${includeDrafts ? '' : ' AND col.published = 1'}`
-  ).all()
+     WHERE p.deleted_at IS NULL AND col.deleted_at IS NULL${includeDrafts ? '' : ' AND col.published = 1'}
+     ORDER BY RANDOM() LIMIT ?`
+  ).bind(FEATURE_SAMPLE_SIZE).all()
   const { results: modelNameRows } = await c.env.DB.prepare('SELECT handle, name FROM model_names').all()
   const modelNames = Object.fromEntries(modelNameRows.map((row) => [row.handle.toLowerCase(), row.name]))
   return c.json(results.map((r) => {
@@ -509,6 +541,7 @@ app.get('/api/feature-photos', async (c) => {
     const handles = [].concat(meta.twitter || [])
     return {
       key_large: r.key_large,
+      key_medium: r.key_medium || r.key_large,
       collection_id: r.collection_id,
       group_id: r.group_id,
       title: r.title,
@@ -617,8 +650,8 @@ async function rotateBackups(bucket) {
 // 먼저 DB가 참조하는 원본 키 목록을 고정하고, 실제 복사는 별도 배치 요청으로 진행합니다.
 app.post('/api/backups', requireAdmin, async (c) => {
   const id = new Date().toISOString().replace(/[:.]/g, '-')
-  const { results } = await c.env.DB.prepare('SELECT key_large, key_thumb FROM photos ORDER BY id').all()
-  const keys = [...new Set(results.flatMap((photo) => [photo.key_large, photo.key_thumb]).filter(Boolean))]
+  const { results } = await c.env.DB.prepare('SELECT key_large, key_medium, key_thumb FROM photos ORDER BY id').all()
+  const keys = photoObjectKeys(results)
   const manifest = { id, created_at: new Date().toISOString(), status: 'pending', completed: 0, objects: keys.map((key) => ({ key })) }
   await writeBackupManifest(c.env.BACKUPS, manifest)
   return c.json({ id, object_count: keys.length, completed: 0, done: keys.length === 0 })
@@ -762,6 +795,10 @@ app.post('/api/trash/photos/:id/restore', requireAdmin, async (c) => {
 async function deleteR2Keys(bucket, keys) {
   for (let i = 0; i < keys.length; i += 1000) await bucket.delete(keys.slice(i, i + 1000))
 }
+// 사진 1행이 가진 모든 R2 키(large/medium/thumb). medium은 예전 사진엔 없습니다.
+function photoObjectKeys(rows) {
+  return [...new Set([].concat(rows).flatMap((p) => [p.key_large, p.key_medium, p.key_thumb]).filter(Boolean))]
+}
 
 app.delete('/api/trash/collections/:id', requireAdmin, async (c) => {
   const id = c.req.param('id')
@@ -770,9 +807,9 @@ app.delete('/api/trash/collections/:id', requireAdmin, async (c) => {
   await c.env.DB.prepare('UPDATE collections SET purge_started_at = COALESCE(purge_started_at, ?) WHERE id = ?')
     .bind(new Date().toISOString(), id).run()
   const { results: photos } = await c.env.DB.prepare(
-    'SELECT key_large, key_thumb FROM photos WHERE collection_id = ?'
+    'SELECT key_large, key_medium, key_thumb FROM photos WHERE collection_id = ?'
   ).bind(id).all()
-  const keys = photos.flatMap((p) => [p.key_large, p.key_thumb])
+  const keys = photoObjectKeys(photos)
   await deleteR2Keys(c.env.PHOTOS, keys)
   if (c.req.query('purge_backups') === '1') await removeKeysFromBackups(c.env.BACKUPS, keys)
   await c.env.DB.batch([
@@ -790,9 +827,10 @@ app.delete('/api/trash/photos/:id', requireAdmin, async (c) => {
   if (!photo) return c.json({ error: 'not found in trash' }, 404)
   await c.env.DB.prepare('UPDATE photos SET purge_started_at = COALESCE(purge_started_at, ?) WHERE id = ?')
     .bind(new Date().toISOString(), id).run()
-  await deleteR2Keys(c.env.PHOTOS, [photo.key_large, photo.key_thumb])
+  const photoKeys = photoObjectKeys(photo)
+  await deleteR2Keys(c.env.PHOTOS, photoKeys)
   if (c.req.query('purge_backups') === '1') {
-    await removeKeysFromBackups(c.env.BACKUPS, [photo.key_large, photo.key_thumb])
+    await removeKeysFromBackups(c.env.BACKUPS, photoKeys)
   }
   await c.env.DB.prepare('DELETE FROM photos WHERE id = ?').bind(id).run()
   return c.json({ ok: true })
@@ -885,13 +923,17 @@ app.delete('/api/collections/:id', requireAdmin, async (c) => {
 })
 
 // ---------- photos ----------
-export async function persistUpload({ bucket, keyLarge, keyThumb, large, thumb, insertPhoto }) {
+export async function persistUpload({ bucket, keyLarge, keyThumb, keyMedium, large, thumb, medium, insertPhoto }) {
   const storedKeys = []
   try {
     await bucket.put(keyLarge, large.stream(), { httpMetadata: { contentType: large.type } })
     storedKeys.push(keyLarge)
     await bucket.put(keyThumb, thumb.stream(), { httpMetadata: { contentType: thumb.type } })
     storedKeys.push(keyThumb)
+    if (medium && keyMedium) {
+      await bucket.put(keyMedium, medium.stream(), { httpMetadata: { contentType: medium.type } })
+      storedKeys.push(keyMedium)
+    }
     return await insertPhoto()
   } catch (error) {
     if (storedKeys.length) {
@@ -912,14 +954,17 @@ app.post('/api/collections/:id/photos', requireAdmin, async (c) => {
   const form = await c.req.formData()
   const large = form.get('large')
   const thumb = form.get('thumb')
+  // medium(1280px)은 카드·그리드용 변형입니다. 구버전 클라이언트 호환을 위해 선택 항목으로 둡니다.
+  const mediumRaw = form.get('medium')
+  const medium = mediumRaw && typeof mediumRaw !== 'string' ? mediumRaw : null
   if (!large || !thumb || typeof large === 'string' || typeof thumb === 'string') {
     return c.json({ error: 'large and thumb files required' }, 400)
   }
   const allowedTypes = new Set(['image/jpeg', 'image/webp'])
-  if (!allowedTypes.has(large.type) || !allowedTypes.has(thumb.type)) {
+  if (!allowedTypes.has(large.type) || !allowedTypes.has(thumb.type) || (medium && !allowedTypes.has(medium.type))) {
     return c.json({ error: 'only JPEG and WebP images are allowed' }, 415)
   }
-  if (large.size > 16 * 1024 * 1024 || thumb.size > 2 * 1024 * 1024) {
+  if (large.size > 16 * 1024 * 1024 || thumb.size > 2 * 1024 * 1024 || (medium && medium.size > 8 * 1024 * 1024)) {
     return c.json({ error: 'image file is too large' }, 413)
   }
   const hasImageSignature = async (file) => {
@@ -927,7 +972,7 @@ app.post('/api/collections/:id/photos', requireAdmin, async (c) => {
     if (file.type === 'image/jpeg') return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
     return bytes.length >= 12 && String.fromCharCode(...bytes.slice(0, 4)) === 'RIFF' && String.fromCharCode(...bytes.slice(8, 12)) === 'WEBP'
   }
-  if (!(await hasImageSignature(large)) || !(await hasImageSignature(thumb))) {
+  if (!(await hasImageSignature(large)) || !(await hasImageSignature(thumb)) || (medium && !(await hasImageSignature(medium)))) {
     return c.json({ error: 'image content does not match its file type' }, 415)
   }
 
@@ -956,16 +1001,19 @@ app.post('/api/collections/:id/photos', requireAdmin, async (c) => {
   const ext = (large.type === 'image/jpeg') ? 'jpg' : 'webp'
   const keyLarge = `p/${collectionId}/${uuid}-l.${ext}`
   const keyThumb = `p/${collectionId}/${uuid}-t.${ext}`
+  const keyMedium = medium ? `p/${collectionId}/${uuid}-m.${medium.type === 'image/jpeg' ? 'jpg' : 'webp'}` : null
   const { meta } = await persistUpload({
     bucket: c.env.PHOTOS,
     keyLarge,
     keyThumb,
+    keyMedium,
     large,
     thumb,
+    medium,
     insertPhoto: () => c.env.DB.prepare(
-      `INSERT INTO photos (collection_id, group_id, key_large, key_thumb, width, height, taken_at, exif_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(collectionId, groupId, keyLarge, keyThumb, width, height, takenAt, exifJson).run(),
+      `INSERT INTO photos (collection_id, group_id, key_large, key_thumb, key_medium, width, height, taken_at, exif_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(collectionId, groupId, keyLarge, keyThumb, keyMedium, width, height, takenAt, exifJson).run(),
   })
 
   // 첫 사진이면 자동으로 대표 지정
@@ -978,7 +1026,51 @@ app.post('/api/collections/:id/photos', requireAdmin, async (c) => {
       console.error(JSON.stringify({ message: 'cover assignment failed', collectionId, photoId: meta.last_row_id, error: String(error) }))
     }
   }
-  return c.json({ id: meta.last_row_id, key_large: keyLarge, key_thumb: keyThumb })
+  return c.json({ id: meta.last_row_id, key_large: keyLarge, key_medium: keyMedium, key_thumb: keyThumb })
+})
+
+// medium 백필: 워커는 이미지를 리사이즈할 수 없으므로 관리자 브라우저가 large를 받아 축소해 되돌려 줍니다.
+app.get('/api/photos/missing-medium', requireAdmin, async (c) => {
+  const limit = Math.min(200, Math.max(1, parseInt(c.req.query('limit') || '50', 10) || 50))
+  const [{ results }, remainingRow] = await c.env.DB.batch([
+    c.env.DB.prepare(
+      'SELECT id, key_large FROM photos WHERE key_medium IS NULL AND deleted_at IS NULL ORDER BY id LIMIT ?'
+    ).bind(limit),
+    c.env.DB.prepare('SELECT COUNT(*) AS n FROM photos WHERE key_medium IS NULL AND deleted_at IS NULL'),
+  ])
+  return c.json({ photos: results, remaining: remainingRow.results?.[0]?.n || 0 })
+})
+
+app.post('/api/photos/:id/medium', requireAdmin, async (c) => {
+  const id = c.req.param('id')
+  const photo = await c.env.DB.prepare('SELECT id, collection_id, key_medium FROM photos WHERE id = ? AND deleted_at IS NULL')
+    .bind(id).first()
+  if (!photo) return c.json({ error: 'not found' }, 404)
+  if (photo.key_medium) return c.json({ ok: true, key_medium: photo.key_medium, skipped: true })
+
+  const form = await c.req.formData()
+  const medium = form.get('medium')
+  if (!medium || typeof medium === 'string') return c.json({ error: 'medium file required' }, 400)
+  if (!['image/jpeg', 'image/webp'].includes(medium.type)) {
+    return c.json({ error: 'only JPEG and WebP images are allowed' }, 415)
+  }
+  if (medium.size > 8 * 1024 * 1024) return c.json({ error: 'image file is too large' }, 413)
+  const bytes = new Uint8Array(await medium.slice(0, 12).arrayBuffer())
+  const signatureOk = medium.type === 'image/jpeg'
+    ? bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
+    : bytes.length >= 12 && String.fromCharCode(...bytes.slice(0, 4)) === 'RIFF' && String.fromCharCode(...bytes.slice(8, 12)) === 'WEBP'
+  if (!signatureOk) return c.json({ error: 'image content does not match its file type' }, 415)
+
+  const keyMedium = `p/${photo.collection_id}/${crypto.randomUUID()}-m.${medium.type === 'image/jpeg' ? 'jpg' : 'webp'}`
+  await c.env.PHOTOS.put(keyMedium, medium.stream(), { httpMetadata: { contentType: medium.type } })
+  try {
+    await c.env.DB.prepare('UPDATE photos SET key_medium = ? WHERE id = ? AND key_medium IS NULL').bind(keyMedium, id).run()
+  } catch (error) {
+    // DB 반영 실패 시 방금 올린 객체는 참조되지 않으므로 지웁니다.
+    await c.env.PHOTOS.delete(keyMedium).catch(() => {})
+    throw error
+  }
+  return c.json({ ok: true, key_medium: keyMedium })
 })
 
 // 사진을 다른 폴더로 이동 (group_id: null = 컬렉션 바로 아래)
@@ -1014,6 +1106,74 @@ app.delete('/api/photos/:id', requireAdmin, async (c) => {
       .bind(next ? next.id : null, photo.collection_id).run()
   }
   return c.json({ ok: true })
+})
+
+// ---------- 일괄 작업 ----------
+// 관리자에서 여러 장을 선택해 처리할 때 사진마다 요청을 보내면 왕복이 선택 수만큼 늘고,
+// 중간에 실패하면 일부만 적용된 상태로 남습니다. 아래 두 엔드포인트는 D1 batch로 한 번에 끝냅니다.
+const BULK_LIMIT = 500
+function parseBulkIds(body) {
+  if (!Array.isArray(body?.ids) || !body.ids.length || body.ids.length > BULK_LIMIT) return null
+  const ids = [...new Set(body.ids.map((id) => Number(id)))]
+  return ids.every((id) => Number.isInteger(id) && id > 0) ? ids : null
+}
+// 대표 사진이 사라졌거나 비어 있으면 남은 사진 중 첫 장으로 다시 지정합니다.
+function reassignCoverStatement(db, collectionId) {
+  return db.prepare(
+    `UPDATE collections SET cover_photo_id = (
+       SELECT id FROM photos WHERE collection_id = ? AND deleted_at IS NULL
+       ORDER BY (sort_order IS NULL), sort_order, taken_at, id LIMIT 1
+     )
+     WHERE id = ? AND (cover_photo_id IS NULL OR cover_photo_id NOT IN (
+       SELECT id FROM photos WHERE collection_id = ? AND deleted_at IS NULL
+     ))`
+  ).bind(collectionId, collectionId, collectionId)
+}
+
+app.post('/api/photos/bulk-delete', requireAdmin, async (c) => {
+  const ids = parseBulkIds(await c.req.json())
+  if (!ids) return c.json({ error: `ids required (max ${BULK_LIMIT})` }, 400)
+  const placeholders = ids.map(() => '?').join(',')
+  const { results: photos } = await c.env.DB.prepare(
+    `SELECT id, collection_id FROM photos WHERE id IN (${placeholders}) AND deleted_at IS NULL`
+  ).bind(...ids).all()
+  if (!photos.length) return c.json({ error: 'not found' }, 404)
+  const foundIds = photos.map((p) => p.id)
+  const collectionIds = [...new Set(photos.map((p) => p.collection_id))]
+  await c.env.DB.batch([
+    c.env.DB.prepare(
+      `UPDATE photos SET deleted_at = ? WHERE id IN (${foundIds.map(() => '?').join(',')})`
+    ).bind(new Date().toISOString(), ...foundIds),
+    ...collectionIds.map((collectionId) => reassignCoverStatement(c.env.DB, collectionId)),
+  ])
+  return c.json({ ok: true, deleted: foundIds.length, ids: foundIds })
+})
+
+app.post('/api/photos/bulk-move', requireAdmin, async (c) => {
+  const body = await c.req.json()
+  const ids = parseBulkIds(body)
+  if (!ids) return c.json({ error: `ids required (max ${BULK_LIMIT})` }, 400)
+  const groupId = body.group_id == null ? null : Number(body.group_id)
+  if (groupId != null && !Number.isInteger(groupId)) return c.json({ error: 'invalid group_id' }, 400)
+
+  const placeholders = ids.map(() => '?').join(',')
+  const { results: photos } = await c.env.DB.prepare(
+    `SELECT id, collection_id FROM photos WHERE id IN (${placeholders}) AND deleted_at IS NULL`
+  ).bind(...ids).all()
+  if (!photos.length) return c.json({ error: 'not found' }, 404)
+  const collectionIds = [...new Set(photos.map((p) => p.collection_id))]
+  // 이동 대상 폴더는 한 컬렉션에만 속하므로, 선택된 사진도 같은 컬렉션이어야 합니다.
+  if (groupId != null) {
+    if (collectionIds.length > 1) return c.json({ error: 'photos span multiple collections' }, 400)
+    const group = await c.env.DB.prepare('SELECT id FROM groups WHERE id = ? AND collection_id = ?')
+      .bind(groupId, collectionIds[0]).first()
+    if (!group) return c.json({ error: 'group does not belong to collection' }, 400)
+  }
+  const foundIds = photos.map((p) => p.id)
+  await c.env.DB.prepare(
+    `UPDATE photos SET group_id = ? WHERE id IN (${foundIds.map(() => '?').join(',')})`
+  ).bind(groupId, ...foundIds).run()
+  return c.json({ ok: true, moved: foundIds.length, ids: foundIds })
 })
 
 // ---------- tweet import ----------
@@ -1142,25 +1302,119 @@ app.get('/', async (c) => {
 })
 
 // ---------- image serving (R2) ----------
+// 업로드 키는 `p/{collectionId}/{uuid}-{l|m|t}.{ext}` 형식입니다. 접미사로 조회할 컬럼이 정해지므로
+// 인덱스를 정확히 타는 등가 비교 한 번으로 끝납니다. (OR 조건은 photos 전체 스캔을 유발했습니다)
+const KEY_COLUMN_BY_SUFFIX = { l: 'key_large', m: 'key_medium', t: 'key_thumb' }
+function photoKeyColumn(key) {
+  return KEY_COLUMN_BY_SUFFIX[/-([lmt])\.[a-z0-9]+$/i.exec(key)?.[1]?.toLowerCase()] || null
+}
+// 공개 이미지는 내용이 바뀌지 않습니다(키에 UUID 포함). 길게 캐시해 워커·D1 호출 자체를 줄입니다.
+const PUBLIC_IMAGE_CACHE = 'public, max-age=2592000, stale-while-revalidate=86400'
+
 app.get('/img/*', async (c) => {
   const key = c.req.path.slice('/img/'.length)
+  const column = photoKeyColumn(key)
   const photo = await c.env.DB.prepare(
-    `SELECT p.id, p.deleted_at, col.published, col.deleted_at AS collection_deleted_at
-     FROM photos p JOIN collections col ON col.id = p.collection_id
-     WHERE p.key_large = ? OR p.key_thumb = ? LIMIT 1`
-  ).bind(key, key).first()
+    column
+      ? `SELECT p.deleted_at, col.published, col.deleted_at AS collection_deleted_at
+         FROM photos p JOIN collections col ON col.id = p.collection_id
+         WHERE p.${column} = ? LIMIT 1`
+      // 접미사가 예상과 다른 예외적인 키만 넓게 조회합니다.
+      : `SELECT p.deleted_at, col.published, col.deleted_at AS collection_deleted_at
+         FROM photos p JOIN collections col ON col.id = p.collection_id
+         WHERE p.key_large = ? OR p.key_medium = ? OR p.key_thumb = ? LIMIT 1`
+  ).bind(...(column ? [key] : [key, key, key])).first()
   if (!photo) return c.text('not found', 404)
   const admin = await isAdmin(c)
-  if (!admin && (photo.deleted_at || photo.collection_deleted_at || photo.published !== 1)) return c.text('not found', 404)
-  const obj = await c.env.PHOTOS.get(key)
+  const isDraft = Boolean(photo.deleted_at || photo.collection_deleted_at) || photo.published !== 1
+  if (!admin && isDraft) return c.text('not found', 404)
+
+  // 초안·삭제 상태는 공개로 전환되기 전이라 캐시하지 않습니다.
+  const cacheControl = admin || isDraft ? 'private, no-store' : PUBLIC_IMAGE_CACHE
+  // 재검증 요청은 R2 조건부 조회로 본문 없이 304로 끊습니다.
+  // (기존에는 If-None-Match를 무시하고 매번 이미지 전체를 다시 전송했습니다)
+  // R2 onlyIf는 따옴표 없는 ETag를 받습니다. 헤더 값에서 weak 표시와 따옴표를 벗겨 전달합니다.
+  const ifNoneMatch = c.req.header('if-none-match')?.split(',')[0]?.trim().replace(/^W\//, '').replace(/^"|"$/g, '')
+  const obj = await c.env.PHOTOS.get(key, ifNoneMatch ? { onlyIf: { etagDoesNotMatch: ifNoneMatch } } : undefined)
   if (!obj) return c.text('not found', 404)
+  if (!obj.body) {
+    return new Response(null, { status: 304, headers: { ETag: obj.httpEtag, 'Cache-Control': cacheControl } })
+  }
   return new Response(obj.body, {
     headers: {
       'Content-Type': obj.httpMetadata?.contentType || 'image/webp',
-      'Cache-Control': admin ? 'private, no-store' : 'public, max-age=300, must-revalidate',
+      'Cache-Control': cacheControl,
       ETag: obj.httpEtag,
+      'Content-Length': String(obj.size),
     },
   })
 })
 
-export default app
+// ---------- 정기 정리 (Cron) ----------
+// 휴지통 보관 기간. 이 기간이 지난 항목은 자동으로 영구 삭제됩니다(R2 원본까지).
+// 원본 스냅샷(_backups)은 건드리지 않으므로, 스냅샷이 있다면 그쪽에서 복구할 수 있습니다.
+// (Workers 런타임은 모듈에서 함수가 아닌 값을 export하면 시작을 거부하므로 export하지 않습니다)
+const TRASH_RETENTION_DAYS = 30
+export function trashRetentionDays() { return TRASH_RETENTION_DAYS }
+
+export async function runScheduledCleanup(env) {
+  const now = Date.now()
+  const cutoff = new Date(now - TRASH_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString()
+  const summary = { sessions: 0, loginAttempts: 0, photos: 0, collections: 0 }
+
+  // 1) 만료 세션·오래된 로그인 시도 (그냥 두면 테이블이 계속 커집니다)
+  const [sessions, attempts] = await env.DB.batch([
+    env.DB.prepare('DELETE FROM admin_sessions WHERE expires_at <= ?').bind(now),
+    env.DB.prepare('DELETE FROM login_attempts WHERE window_started_at <= ?').bind(now - LOGIN_WINDOW_MS),
+  ])
+  summary.sessions = sessions.meta?.changes || 0
+  summary.loginAttempts = attempts.meta?.changes || 0
+
+  // 2) 보관기한이 지난 휴지통 사진 (컬렉션째 지워질 사진은 아래 3)에서 함께 처리)
+  const { results: stalePhotos } = await env.DB.prepare(
+    `SELECT p.id, p.key_large, p.key_medium, p.key_thumb, p.collection_id FROM photos p
+     JOIN collections col ON col.id = p.collection_id
+     WHERE p.deleted_at IS NOT NULL AND p.deleted_at <= ? AND col.deleted_at IS NULL
+     LIMIT 500`
+  ).bind(cutoff).all()
+  if (stalePhotos.length) {
+    await deleteR2Keys(env.PHOTOS, photoObjectKeys(stalePhotos))
+    const ids = stalePhotos.map((p) => p.id)
+    const collectionIds = [...new Set(stalePhotos.map((p) => p.collection_id))]
+    await env.DB.batch([
+      env.DB.prepare(`DELETE FROM photos WHERE id IN (${ids.map(() => '?').join(',')})`).bind(...ids),
+      ...collectionIds.map((collectionId) => reassignCoverStatement(env.DB, collectionId)),
+    ])
+    summary.photos = ids.length
+  }
+
+  // 3) 보관기한이 지난 휴지통 컬렉션 (사진·폴더까지 함께)
+  const { results: staleCollections } = await env.DB.prepare(
+    'SELECT id FROM collections WHERE deleted_at IS NOT NULL AND deleted_at <= ? LIMIT 20'
+  ).bind(cutoff).all()
+  for (const col of staleCollections) {
+    const { results: photos } = await env.DB.prepare(
+      'SELECT key_large, key_medium, key_thumb FROM photos WHERE collection_id = ?'
+    ).bind(col.id).all()
+    await deleteR2Keys(env.PHOTOS, photoObjectKeys(photos))
+    await env.DB.batch([
+      env.DB.prepare('DELETE FROM photos WHERE collection_id = ?').bind(col.id),
+      env.DB.prepare('DELETE FROM groups WHERE collection_id = ?').bind(col.id),
+      env.DB.prepare('DELETE FROM collections WHERE id = ?').bind(col.id),
+      env.DB.prepare("UPDATE settings SET value = '' WHERE key = 'featured_collection_id' AND value = ?").bind(String(col.id)),
+    ])
+    summary.collections++
+  }
+
+  console.log(JSON.stringify({ message: 'scheduled cleanup', retention_days: TRASH_RETENTION_DAYS, ...summary }))
+  return summary
+}
+
+export default {
+  fetch: app.fetch,
+  scheduled: async (event, env, ctx) => {
+    ctx.waitUntil(runScheduledCleanup(env).catch((error) => {
+      console.error(JSON.stringify({ message: 'scheduled cleanup failed', error: String(error) }))
+    }))
+  },
+}
