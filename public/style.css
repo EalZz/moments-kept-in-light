@@ -40,6 +40,19 @@
     U+2C60-2C7F, U+A720-A7FF;
 }
 
+/* 구글 폰트가 막힌 환경(트위터 인앱 브라우저 등)에서 한글이 명조를 잃지 않게,
+   상용 한글 2,350자 서브셋을 같은 도메인에 두고 Noto Serif KR '다음' 순위로 둡니다.
+   웹폰트는 실제로 필요할 때만 내려오므로, 구글 폰트가 정상인 방문자는 이 파일을 받지 않습니다.
+   상용 밖의 드문 음절(예: 묭)은 기기의 명조계 서체로 넘어갑니다. */
+@font-face {
+  font-family: 'Noto Serif KR Fallback';
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url('/fonts/noto-serif-kr-common.woff2') format('woff2');
+  unicode-range: U+3000-30FF, U+3130-318F, U+AC00-D7A3, U+FF01-FF60;
+}
+
 :root {
   --bg: #0b0b0d;
   --bg-soft: #141417;
@@ -51,7 +64,8 @@
   --accent: #b8a98c;                      /* 절제된 웜뉴트럴 악센트 (호버/활성) */
   --radius: 4px;
   /* 한글은 Noto Serif KR을 쓰되, 그것도 못 받으면 기기에 있는 명조계 서체로 내려갑니다 */
-  --font-display: "Cormorant Garamond", "Noto Serif KR", "Nanum Myeongjo", AppleMyungjo, Batang, serif;
+  --font-display: "Cormorant Garamond", "Noto Serif KR", "Noto Serif KR Fallback",
+    "Nanum Myeongjo", AppleMyungjo, Batang, serif;
 
   /* 글래스 표면 — 내비·모바일 메뉴·검색 패널이 모두 같은 값을 씁니다.
      블러가 실제로 보이도록 배경을 충분히 투명하게 두고(0.62), 그만큼 강하게 흐려
