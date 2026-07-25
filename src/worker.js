@@ -194,6 +194,15 @@ app.get('/api/stats', requireAdmin, async (c) => {
   })
 })
 
+// 공개 GET 응답을 짧게 캐시합니다. 뒤로가기·재방문 때 같은 목록을 다시 받지 않아
+// 화면이 즉시 그려집니다. 관리자 응답에는 비공개 초안이 섞이므로 저장하지 않습니다.
+// Vary: Cookie — 로그인 여부에 따라 내용이 달라지므로 캐시를 섞지 않게 합니다.
+function apiCacheHeaders(includeDrafts) {
+  return includeDrafts
+    ? { 'Cache-Control': 'private, no-store' }
+    : { 'Cache-Control': 'public, max-age=60, stale-while-revalidate=300', Vary: 'Cookie' }
+}
+
 // ---------- collections ----------
 app.get('/api/collections', async (c) => {
   const includeDrafts = await isAdmin(c)
@@ -250,7 +259,7 @@ app.get('/api/collections', async (c) => {
     delete r.first_w
     delete r.first_h
   }
-  return c.json(results)
+  return c.json(results, 200, apiCacheHeaders(includeDrafts))
 })
 
 app.post('/api/collections', requireAdmin, async (c) => {
@@ -283,7 +292,7 @@ app.get('/api/collections/:id', async (c) => {
     const handles = [].concat(g.meta.twitter || [])
     g.model_names = handles.map((handle) => modelNames[handle.toLowerCase()] || (handles.length === 1 ? g.name : ''))
   }
-  return c.json({ ...col, photos, groups })
+  return c.json({ ...col, photos, groups }, 200, apiCacheHeaders(includeDrafts))
 })
 
 // ---------- 수동 정렬 저장 ----------
@@ -404,7 +413,7 @@ app.get('/api/models', async (c) => {
     _ord: m.best ? m.best.ord : 999,
   })).sort((a, b) => a._ord - b._ord)
   out.forEach((m) => delete m._ord)
-  return c.json(out)
+  return c.json(out, 200, apiCacheHeaders(includeDrafts))
 })
 
 // 모델 상세: 행사별 섹션으로 사진 묶음
@@ -448,7 +457,7 @@ app.get('/api/models/:handle', async (c) => {
     name: names[canon] || (solo && solo.name) || '@' + handle,
     photo_count: photos.length,
     sections,
-  })
+  }, 200, apiCacheHeaders(includeDrafts))
 })
 
 // ---------- 모델 별칭/이름 관리 (admin) ----------
@@ -542,7 +551,7 @@ app.get('/api/photos', async (c) => {
         character: meta.character || '',
       }
     }),
-  })
+  }, 200, apiCacheHeaders(includeDrafts))
 })
 
 // 홈 랜덤 슬라이드용: 전체 사진 + 행사명 + 모델 크레딧
@@ -574,7 +583,7 @@ app.get('/api/feature-photos', async (c) => {
       model_names: handles.map((handle) => modelNames[handle.toLowerCase()] || (handles.length === 1 ? r.group_name : '')),
       character: meta.character || '',
     }
-  }))
+  }), 200, apiCacheHeaders(includeDrafts))
 })
 
 // ---------- site settings (메인에 걸 컬렉션 등) ----------
@@ -586,7 +595,7 @@ app.get('/api/settings', async (c) => {
   return c.json({
     featured_collection_id: map.featured_collection_id ? +map.featured_collection_id : null,
     about,
-  })
+  }, 200, apiCacheHeaders(false))
 })
 
 app.patch('/api/settings', requireAdmin, async (c) => {

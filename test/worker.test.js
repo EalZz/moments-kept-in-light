@@ -624,3 +624,27 @@ describe('view counting', () => {
     expect(await totalViews()).toBe(before)
   })
 })
+
+describe('api caching', () => {
+  it('caches public listings briefly but never caches admin responses', async () => {
+    await seedCollection({ title: 'Cacheable', published: 1 })
+
+    const anon = await SELF.fetch('https://example.com/api/collections')
+    expect(anon.headers.get('cache-control')).toContain('max-age=60')
+    // 로그인 여부에 따라 내용이 달라지므로 캐시가 섞이지 않아야 합니다.
+    expect(anon.headers.get('vary')).toBe('Cookie')
+
+    const { cookie } = await login()
+    const asAdmin = await SELF.fetch('https://example.com/api/collections', { headers: { cookie } })
+    expect(asAdmin.headers.get('cache-control')).toBe('private, no-store')
+  })
+
+  it('keeps draft-bearing endpoints uncacheable for admins', async () => {
+    const collectionId = await seedCollection({ title: 'Draft only', published: 0 })
+    const { cookie } = await login()
+    for (const path of ['/api/photos', '/api/feature-photos', '/api/models', `/api/collections/${collectionId}`]) {
+      const response = await SELF.fetch(`https://example.com${path}`, { headers: { cookie } })
+      expect(response.headers.get('cache-control'), path).toBe('private, no-store')
+    }
+  })
+})

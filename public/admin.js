@@ -115,10 +115,35 @@ async function deletePhotoBackup() {
   return api(`/backups/${target.id}`, { method: 'DELETE' })
 }
 
+// ---------- 화면 이동 (해시 라우팅) ----------
+// 관리자도 브라우저 뒤로가기로 목록으로 돌아갈 수 있어야 합니다.
+// 화면을 직접 부르는 대신 해시만 바꾸고, 실제 렌더는 routeAdmin이 담당합니다.
+let adminBooted = false
+// 목록은 '#/'로 둡니다. 빈 해시로 두면 이미 빈 상태일 때 hashchange가 발생하지 않습니다.
+function goCollections() {
+  if ((location.hash || '') === '#/' || location.hash === '') routeAdmin()
+  else location.hash = '#/'
+}
+function goCollection(id) { location.hash = '#/c/' + id }
+
+async function routeAdmin() {
+  if (!adminBooted) return
+  const m = (location.hash || '').match(/^#\/c\/(\d+)$/)
+  if (!m) return renderCollections()
+  try {
+    await renderCollection(m[1])
+  } catch (error) {
+    // 이미 삭제된 컬렉션 주소(뒤로/앞으로 이동·북마크)면 목록으로 되돌립니다.
+    console.error('collection render failed', error)
+    goCollections()
+  }
+}
+window.addEventListener('hashchange', () => { routeAdmin() })
+
 // ---------- login ----------
 async function boot() {
   const { admin } = await api('/me')
-  if (admin) return renderCollections()
+  if (admin) { adminBooted = true; return routeAdmin() }
   app.innerHTML = `
     <div class="login-box panel">
       <h3>관리자 로그인</h3>
@@ -129,7 +154,8 @@ async function boot() {
   const tryLogin = async () => {
     try {
       await api('/login', { method: 'POST', json: { password: document.getElementById('pw').value } })
-      renderCollections()
+      adminBooted = true
+      routeAdmin()
     } catch {
       document.getElementById('loginMsg').textContent = '비밀번호가 틀렸습니다'
     }
@@ -277,10 +303,10 @@ async function renderCollections() {
         description: document.getElementById('newDesc').value.trim(),
       },
     })
-    renderCollection(id)
+    goCollection(id)
   })
   app.querySelectorAll('.col-item').forEach((el) =>
-    el.addEventListener('click', () => renderCollection(el.dataset.id)))
+    el.addEventListener('click', () => goCollection(el.dataset.id)))
 
   // 컬렉션 순서 이동 (▲▼) — 클릭이 컬렉션 열기로 번지지 않게 차단
   const moveCollection = async (cid, dir) => {
@@ -577,7 +603,7 @@ async function renderCollection(id) {
     ${groups.map((g) => sectionHtml(col, g, col.photos.filter((p) => p.group_id === g.id))).join('')}`
 
   setupAdminMenu()
-  document.getElementById('backBtn').addEventListener('click', renderCollections)
+  document.getElementById('backBtn').addEventListener('click', goCollections)
   document.getElementById('editColBtn').addEventListener('click', () => openCollectionEditor(col))
   document.getElementById('publishBtn').addEventListener('click', async () => {
     const published = col.published === 0 ? 1 : 0
@@ -598,7 +624,7 @@ async function renderCollection(id) {
   document.getElementById('delColBtn').addEventListener('click', async () => {
     if (!confirm(`"${col.title}" 컬렉션과 사진 ${col.photos.length}장을 휴지통으로 옮길까요?`)) return
     await api('/collections/' + id, { method: 'DELETE' })
-    renderCollections()
+    goCollections()
   })
 
   // 섹션별 이벤트 연결

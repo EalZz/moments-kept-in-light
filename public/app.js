@@ -928,6 +928,11 @@ async function route() {
   const isHome = hash === '#/' || hash === ''
   const m = hash.match(/^#\/c\/(\d+)(?:\/g(\d+))?$/)
   const mm = hash.match(/^#\/m\/([A-Za-z0-9_]+)$/)
+  // 렌더는 데이터를 받은 뒤에 일어나므로, 그동안 이전 화면이 남아 "뒤로가기가 느린" 느낌을 줍니다.
+  // 캐시가 있으면 대개 즉시 끝나니, 조금 지체될 때만 이전 화면을 비워 전환이 시작된 걸 알립니다.
+  const showPending = setTimeout(() => {
+    main.innerHTML = '<div class="empty" aria-live="polite">불러오는 중…</div>'
+  }, 180)
   try {
     if (m) await renderCollection(m[1], m[2] ? +m[2] : null)
     else if (hash === '#/photos') await renderPhotos()
@@ -938,6 +943,8 @@ async function route() {
   } catch (e) {
     main.innerHTML = `<div class="empty">불러오지 못했습니다</div>`
     console.error(e)
+  } finally {
+    clearTimeout(showPending)
   }
   if (isHome) setupIntro(true) // 인트로 모드 + 초기 스크롤 위치 지정
   else { document.body.classList.remove('intro-on'); window.scrollTo(0, 0) }
