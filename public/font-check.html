@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex" />
+<title>서체 진단</title>
+<!-- 사이트의 실제 스타일시트를 그대로 불러와 진짜 @font-face 규칙을 검사합니다 -->
+<link rel="stylesheet" href="/style.css" id="siteCss" />
+<!-- 사이트와 같은 조건을 만들기 위해 구글 폰트도 같이 불러옵니다 -->
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  body { background:#0b0b0d; color:#ececea; margin:0; padding:18px 16px 60px;
+         font-family:-apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", sans-serif; font-size:15px; }
+  h1 { font-size:19px; margin:0 0 14px; font-family:inherit; text-transform:none; letter-spacing:0; }
+  .row { padding:9px 0; border-bottom:1px solid #26262b; }
+  .k { color:#9c9c9f; font-size:12px; letter-spacing:0.04em; }
+  .v { font-size:15px; word-break:break-all; margin-top:3px; }
+  .ok { color:#7fd1a0; } .bad { color:#ff8f8f; } .warn { color:#ffd479; }
+  .samples { margin-top:20px; }
+  .sample { padding:12px 0; border-bottom:1px solid #26262b; }
+  .sample .lab { color:#9c9c9f; font-size:11px; letter-spacing:0.1em; text-transform:uppercase; }
+  .sample .txt { font-size:34px; line-height:1.1; margin-top:4px; }
+  .s1 { font-family:"Cormorant Garamond"; }
+  .s2 { font-family:serif; }
+  .s3 { font-family:"Noto Serif"; }
+  .s4 { font-family:"Times New Roman"; }
+  .s5 { font-family:sans-serif; }
+  .s6 { font-family:"Noto Serif KR"; }
+  .s7 { font-family:"Noto Serif KR Fallback"; }
+  #out { white-space:pre-wrap; }
+  /* 역-덮어쓰기 시도: 시스템 폰트와 같은 이름으로 선언해 강제 치환된 자리를 가로챕니다. */
+  .hj { font-size:30px; line-height:1.15; }
+</style>
+<script>
+  // 후보 이름마다 @font-face 를 만들어 넣습니다(같은 Cormorant 파일을 씁니다).
+  window.CANDIDATES = ['SamsungOne','Samsung One','SamsungSans','Samsung Sans','One UI Sans',
+    'SamsungOneUI','Roboto','Noto Sans','Noto Sans KR','Noto Sans CJK KR','sans-serif-thin',
+    'system-ui','SEC','SamsungKorean','ZzControlFont'];
+  // 후보마다 다른 size-adjust 배율을 줍니다. 강제 렌더링의 폭을 재면
+  // 배율이 역산되고, 그 배율이 곧 '강제되는 폰트 이름'을 가리킵니다.
+  window.ADJUST = window.CANDIDATES.map(function (_, i) { return 110 + i * 5 })
+  document.write('<style>' + window.CANDIDATES.map(function (n, i) {
+    return "@font-face{font-family:'" + n + "';font-style:normal;font-weight:400;font-display:block;" +
+           "size-adjust:" + window.ADJUST[i] + "%;" +
+           "src:url('/fonts/cormorant-latin-500.woff2') format('woff2');}" +
+           ".hj" + i + "{font-family:'" + n + "';}"
+  }).join('') + '</style>')
+</script>
+</head>
+<body>
+<h1>서체 진단</h1>
+<div id="out">측정 중…</div>
+
+<div class="samples">
+  <div class="sample"><div class="lab">1. Cormorant Garamond (자체 서빙)</div><div class="txt s1">Moments kept</div></div>
+  <div class="sample"><div class="lab">2. generic serif</div><div class="txt s2">Moments kept</div></div>
+  <div class="sample"><div class="lab">3. Noto Serif</div><div class="txt s3">Moments kept</div></div>
+  <div class="sample"><div class="lab">4. Times New Roman</div><div class="txt s4">Moments kept</div></div>
+  <div class="sample"><div class="lab">5. generic sans-serif (비교용)</div><div class="txt s5">Moments kept</div></div>
+  <div class="sample"><div class="lab">6. Noto Serif KR (구글)</div><div class="txt s6">한글 명조 확인</div></div>
+  <div class="sample"><div class="lab">7. Noto Serif KR Fallback (자체)</div><div class="txt s7">한글 명조 확인</div></div>
+</div>
+
+<h1 style="margin-top:28px">역-덮어쓰기 시도</h1>
+<div id="hijack"></div>
+
+<script>
+// 같은 글자를 서체만 바꿔 그려 폭을 비교합니다.
+// 폭이 sans-serif와 같으면 그 서체가 실제로는 안 쓰이고 있다는 뜻입니다.
+function widthOf(family, text) {
+  const cv = document.createElement('canvas').getContext('2d')
+  cv.font = '500 40px ' + family
+  return Math.round(cv.measureText(text).width * 10) / 10
+}
+function line(k, v, cls) {
+  return '<div class="row"><div class="k">' + k + '</div><div class="v ' + (cls || '') + '">' + v + '</div></div>'
+}
+async function fileCheck(path) {
+  try {
+    const r = await fetch(path, { cache: 'no-store' })
+    const b = await r.arrayBuffer()
+    const sig = new TextDecoder().decode(new Uint8Array(b.slice(0, 4)))
+    return { ok: r.ok, status: r.status, bytes: b.byteLength, woff2: sig === 'wOF2' }
+  } catch (e) {
+    return { ok: false, status: 'fetch 실패', bytes: 0, woff2: false, err: String(e) }
+  }
+}
+
+;(async () => {
+  const TEXT = 'Moments kept in light'
+  const KR = '한글 명조 확인'
+  const out = []
+
+  const css = document.getElementById('siteCss')
+  out.push(line('스타일시트 주소', css.getAttribute('href')))
+  // 실제로 적용된 style.css 규칙 수 (0이면 CSS 자체가 안 불렸다는 뜻)
+  let ruleCount = '읽을 수 없음'
+  try { ruleCount = String([...document.styleSheets].reduce((n, s) => { try { return n + s.cssRules.length } catch { return n } }, 0)) } catch {}
+  out.push(line('적용된 CSS 규칙 수', ruleCount, ruleCount === '0' ? 'bad' : 'ok'))
+
+  // 지금 받은 style.css 가 새 버전인지 (옛 캐시를 보고 있는지 판별)
+  try {
+    const cssText = await (await fetch('/style.css', { cache: 'no-store' })).text()
+    const fresh = cssText.includes('cormorant-latin-500')
+    out.push(line('style.css 가 새 버전인가', fresh ? '예' : '아니오 — 옛 파일을 보고 있음', fresh ? 'ok' : 'bad'))
+  } catch (e) { out.push(line('style.css 확인 실패', String(e), 'bad')) }
+
+  // 폰트 파일이 실제로 내려오는지
+  for (const p of ['/fonts/cormorant-latin-500.woff2', '/fonts/noto-serif-kr-common-500.woff2']) {
+    const r = await fileCheck(p)
+    out.push(line('파일 ' + p.split('/').pop(),
+      (r.ok ? 'HTTP ' + r.status + ' · ' + Math.round(r.bytes / 1024) + 'KB · woff2=' + (r.woff2 ? '예' : '아니오')
+            : '실패 (' + r.status + ')'),
+      r.ok && r.woff2 ? 'ok' : 'bad'))
+  }
+
+  // 구글 폰트가 이 브라우저에서 되는지
+  const g = await fileCheck('https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@500&display=swap')
+  out.push(line('구글 폰트 접근', g.ok ? 'HTTP ' + g.status + ' · ' + g.bytes + 'B' : '차단/실패 (' + g.status + ')', g.ok ? 'ok' : 'warn'))
+
+  // @font-face 가 파싱됐는지 (규칙이 버려지면 0)
+  let faces = 0, families = new Set()
+  try { document.fonts.forEach((f) => { faces++; families.add(f.family) }) } catch {}
+  out.push(line('@font-face 등록 수', String(faces) + (faces ? ' (' + [...families].join(', ') + ')' : ''), faces ? 'ok' : 'bad'))
+
+  // 강제로 불러보기
+  let loadErr = ''
+  try { await document.fonts.load('500 40px "Cormorant Garamond"', TEXT) } catch (e) { loadErr = String(e) }
+  try { await document.fonts.load('500 40px "Noto Serif KR Fallback"', KR) } catch (e) { loadErr += ' / ' + String(e) }
+  if (loadErr) out.push(line('fonts.load 오류', loadErr, 'bad'))
+
+  const cg = document.fonts.check('500 40px "Cormorant Garamond"', TEXT)
+  out.push(line('Cormorant 사용 가능', cg ? '예' : '아니오', cg ? 'ok' : 'bad'))
+  const kf = document.fonts.check('500 40px "Noto Serif KR Fallback"', KR)
+  out.push(line('한글 폴백 사용 가능', kf ? '예' : '아니오', kf ? 'ok' : 'bad'))
+  try { await document.fonts.load('500 40px "Noto Serif KR"', KR) } catch {}
+  const kg = document.fonts.check('500 40px "Noto Serif KR"', KR)
+  out.push(line('한글 구글 폰트 사용 가능', kg ? '예' : '아니오', kg ? 'ok' : 'warn'))
+
+  // 폭 비교 — 여기가 핵심입니다
+  const wSans = widthOf('sans-serif', TEXT)
+  const wSerif = widthOf('serif', TEXT)
+  const wCg = widthOf('"Cormorant Garamond"', TEXT)
+  out.push(line('글자 폭 (sans / serif / Cormorant)', wSans + ' / ' + wSerif + ' / ' + wCg))
+  out.push(line('판정: Cormorant 가 실제로 쓰이는가',
+    wCg !== wSans && wCg !== wSerif ? '예 — 자체 서체가 적용됨' : '아니오 — ' + (wCg === wSans ? 'sans 로 대체됨' : 'serif 로 대체됨'),
+    wCg !== wSans && wCg !== wSerif ? 'ok' : 'bad'))
+  out.push(line('판정: generic serif 가 진짜 세리프인가',
+    wSerif !== wSans ? '예' : '아니오 — 이 기기는 serif 를 sans 로 매핑함',
+    wSerif !== wSans ? 'ok' : 'warn'))
+
+  out.push(line('브라우저', navigator.userAgent))
+
+  // ---- 강제되는 폰트 이름 특정 ----
+  // 후보마다 size-adjust 배율이 다르므로, 강제 렌더링의 폭에서 배율을 역산하면 이름이 나옵니다.
+  const BASE = 349.7 // Cormorant 100% 기준폭 (같은 파일·같은 크기면 기기와 무관하게 같습니다)
+  for (const n of window.CANDIDATES) {
+    try { await document.fonts.load('400 40px "' + n + '"', TEXT) } catch {}
+  }
+  const forced = widthOf('sans-serif', TEXT)
+  const ratio = forced / BASE
+  let best = -1, bestGap = 1e9
+  window.ADJUST.forEach((pct, i) => {
+    const gap = Math.abs(ratio * 100 - pct)
+    if (gap < bestGap) { bestGap = gap; best = i }
+  })
+  const identified = bestGap < 2.5
+  out.push(line('강제 렌더링 폭 / 배율', forced + ' / ' + Math.round(ratio * 1000) / 10 + '%'))
+  out.push(line('▶ 강제되는 폰트 이름',
+    identified ? window.CANDIDATES[best] + '  (배율 ' + window.ADJUST[best] + '% 일치)'
+               : '특정 실패 — 후보에 없는 이름입니다 (배율 ' + Math.round(ratio * 1000) / 10 + '%)',
+    identified ? 'ok' : 'bad'))
+  const rows = []
+  for (let i = 0; i < window.CANDIDATES.length; i++) {
+    rows.push((i === best && identified ? '▶ ' : '— ') + window.CANDIDATES[i] + ' (' + window.ADJUST[i] + '%)')
+  }
+  out.push(line('후보 목록', rows.join('<br>')))
+
+  // 눈으로도 확인할 수 있게 샘플을 붙입니다
+  const box = document.getElementById('hijack')
+  box.innerHTML = window.CANDIDATES.map((n, i) =>
+    '<div class="sample"><div class="lab">' + (i + 1) + '. ' + n + '</div>' +
+    '<div class="txt hj hj' + i + '">Moments kept</div></div>').join('')
+
+  document.getElementById('out').innerHTML = out.join('')
+})()
+</script>
+</body>
+</html>
