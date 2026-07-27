@@ -1724,7 +1724,6 @@ app.get('/', async (c) => {
       .replace('href="style.css"', `href="style.css?v=${build}"`)
       .replace('src="app.js"', `src="app.js?v=${build}"`)
       .replace('src="config.js"', `src="config.js?v=${build}"`)
-      .replace('href="/font-check"', `href="/font-check?v=${build}"`)
   }
   // c.html로 반환해야 위에서 설정한 쿠키(nostat)가 응답에 함께 실립니다.
   return c.html(html)

@@ -1545,5 +1545,3 @@ footer.site {
   letter-spacing: 0.14em;
 }
 footer.site a:hover { color: var(--fg-dim); }
-/* 임시 진단 링크 — 확인이 끝나면 지웁니다 */
-footer.site .diag { display: block; margin-top: 10px; font-size: 10px; opacity: 0.45; }
