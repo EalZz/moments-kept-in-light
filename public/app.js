@@ -471,6 +471,7 @@ function startRandomFeature(deck) {
   const show = (dir) => {
     if (busy) return
     busy = true
+    startTimer() // 자동이든 수동이든, 전환이 일어난 순간부터 다음 자동 넘김을 다시 셉니다
     if (dir > 0) {
       idx++
       if (idx >= deck.length) {
@@ -511,17 +512,20 @@ function startRandomFeature(deck) {
   }
   startTimer()
 
-  // 터치 스와이프 + 마우스 드래그 (탭/클릭과 구분: 수평 이동 50px 이상)
+  // 터치 스와이프 + 마우스 드래그 (탭/클릭과 구분: 수평 이동 35px 이상)
   let sx = 0, sy = 0, tracking = false, swiped = false
   const begin = (x, y) => { sx = x; sy = y; tracking = true }
   const finish = (x, y) => {
     if (!tracking) return
     tracking = false
     const dx = x - sx, dy = y - sy
-    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) {
+    if (Math.abs(dx) > 35 && Math.abs(dx) > Math.abs(dy)) {
       swiped = true
-      show(dx < 0 ? 1 : -1)
-      startTimer() // 수동으로 넘기면 자동 타이머 리셋
+      show(dx < 0 ? 1 : -1) // 타이머 리셋은 show() 안에서
+    } else if (Math.abs(dx) > 10) {
+      // 문턱에 못 미친 짧은 플릭 — 슬라이드는 안 넘기더라도, 만진 직후
+      // 자동 넘김이 튀어나오지 않게 카운트다운은 다시 셉니다.
+      startTimer()
     }
   }
   link.addEventListener('touchstart', (e) => begin(e.touches[0].clientX, e.touches[0].clientY), { passive: true })
