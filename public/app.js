@@ -574,15 +574,63 @@ function shootTypeLabel(c) {
 function locationLabel(value) {
   return ({ venue: 'Event venue', outdoor: 'Outdoor', studio: 'Studio' }[value] || '')
 }
+function sessionList(value, separator = /[,\s]+/) {
+  const values = Array.isArray(value) ? value : String(value || '').split(separator)
+  return values.map((item) => String(item || '').trim()).filter(Boolean)
+}
+function sessionModelValue(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const model = {
+    name: String(value.name || '').trim(),
+    handles: sessionList(value.twitter).map((handle) => handle.replace(/^@/, '')),
+    character: String(value.character || '').trim(),
+    series: sessionList(value.series, /[,\n]+/),
+  }
+  return model.name || model.handles.length || model.character || model.series.length ? model : null
+}
+function sessionTitleFallback(title) {
+  const parts = String(title || '').split(/\s+[-–—]\s+/)
+  if (parts.length < 2) return { name: String(title || '').trim(), handles: [], character: '', series: [] }
+  return {
+    name: parts.shift().trim(),
+    handles: [],
+    character: parts.join(' - ').trim(),
+    series: [],
+  }
+}
+function sessionIdentityOf(title, sections = [], collectionModel = null) {
+  const direct = sessionModelValue(collectionModel)
+  if (direct) return direct
+  const legacy = sections.find((section) => section.name || section.character || section.handles?.length)
+  if (legacy) {
+    return {
+      name: sessionList(legacy.modelNames).join(' & ') || String(legacy.name || '').trim(),
+      handles: sessionList(legacy.handles),
+      character: String(legacy.character || '').trim(),
+      series: sessionList(legacy.series, /[,\n]+/),
+    }
+  }
+  return sessionTitleFallback(title)
+}
+function sessionSubtitle(identity) {
+  return [sessionList(identity?.series, /[,\n]+/).join(', '), identity?.character || ''].filter(Boolean).join(' · ')
+}
+function sessionAccountsHtml(identity) {
+  return sessionList(identity?.handles).map((handle) =>
+    `<a href="https://x.com/${esc(handle)}" target="_blank" rel="noopener">@${esc(handle)} ↗</a>`).join(', ')
+}
 function cardHtml(c) {
   const type = shootTypeOf(c)
+  const identity = type === 'session' ? sessionIdentityOf(c.title, [], c.session_model) : null
+  const cardTitle = identity?.name || c.title
+  const cardSubtitle = identity ? sessionSubtitle(identity) : ''
   const info = type === 'session'
     ? [locationLabel(c.location_type), `${c.photo_count} photos`].filter(Boolean).join(' · ')
     : [c.date, `${c.photo_count} photos`].filter(Boolean).join(' · ')
   return `
     <a class="card card--${type}" href="#/c/${c.id}">
       <div class="cover" ${c.cover_w && c.cover_h ? `style="aspect-ratio:${c.cover_w}/${c.cover_h}"` : ''}>
-        <img src="/img/${esc(c.cover_medium || c.cover_large || c.cover_thumb)}" alt="${esc(c.title)}" loading="lazy" data-fade />
+        <img src="/img/${esc(c.cover_medium || c.cover_large || c.cover_thumb)}" alt="${esc(cardTitle)}" loading="lazy" data-fade />
       </div>
       ${type === 'event' && (c.preview_thumbs || []).length ? `<div class="strip">
         ${c.preview_thumbs.map((k, i) => {
@@ -593,7 +641,8 @@ function cardHtml(c) {
       </div>` : ''}
       <div class="meta">
         <div class="info">${esc(shootTypeLabel(c))}${info ? ` · ${esc(info)}` : ''}</div>
-        <div class="title">${esc(c.title)}</div>
+        <div class="title">${esc(cardTitle)}</div>
+        ${cardSubtitle ? `<div class="session-subtitle">${esc(cardSubtitle)}</div>` : ''}
       </div>
     </a>`
 }
@@ -877,41 +926,6 @@ function sessionGalleryHtml(photos) {
   </div>`
 }
 
-function sessionModelHtml(sections, collectionModel = null) {
-  const directModel = collectionModel && (
-    collectionModel.name || collectionModel.twitter?.length || collectionModel.character
-  ) ? {
-    name: collectionModel.name || '',
-    handles: [].concat(collectionModel.twitter || []).filter(Boolean),
-    modelNames: collectionModel.name ? [collectionModel.name] : [],
-    character: collectionModel.character || '',
-    isCollectionModel: true,
-  } : null
-  const models = directModel ? [directModel] : sections.map((s) => ({
-    ...s,
-    handles: s.handles || [],
-    modelNames: s.modelNames || [],
-  }))
-  if (!models.length) return ''
-  const html = models.map((s) => {
-    const handles = s.handles || []
-    const names = (s.modelNames || []).filter(Boolean)
-    const displayName = names.join(' & ') || s.name || handles.map((h) => '@' + h).join(' & ')
-    const nameHtml = !s.isCollectionModel && handles.length === 1
-      ? `<a href="#/m/${esc(handles[0])}" title="이 모델 사진 모아보기">${esc(displayName)}</a>`
-      : esc(displayName)
-    const handleHtml = handles.map((h) =>
-      `<a href="https://x.com/${esc(h)}" target="_blank" rel="noopener">@${esc(h)} ↗</a>`).join(', ')
-    const detail = [handleHtml, s.character ? `<span class="chr${handles.length ? '' : ' chr--alone'}">${esc(s.character)}</span>` : '']
-      .filter(Boolean).join('')
-    return `<div class="session-model">
-      <div class="session-model-name">${nameHtml}</div>
-      ${detail ? `<div class="session-model-detail">${detail}</div>` : ''}
-    </div>`
-  }).join('')
-  return `<div class="session-models" aria-label="Models">${html}</div>`
-}
-
 async function renderCollection(id, focusGroup = null) {
   const col = await api('/collections/' + id)
   const ungrouped = col.photos.filter((p) => !p.group_id)
@@ -947,7 +961,10 @@ async function renderCollection(id, focusGroup = null) {
   if (shootTypeOf(col) === 'session') {
     jSets = null
     const facts = [col.date, locationLabel(col.location_type), `${flat.length} photos`].filter(Boolean).join(' · ')
-    const models = sessionModelHtml(sections, sessionModel)
+    const identity = sessionIdentityOf(col.title, sections, sessionModel)
+    const title = identity.name || col.title
+    const subtitle = sessionSubtitle(identity)
+    const accounts = sessionAccountsHtml(identity)
     const related = col.related_event_id && col.related_event_title
       ? `<a class="related-event" href="#/c/${col.related_event_id}">From Events · ${esc(col.related_event_title)}${col.related_event_date ? ` · ${esc(col.related_event_date)}` : ''} →</a>`
       : ''
@@ -955,8 +972,9 @@ async function renderCollection(id, focusGroup = null) {
       <div class="col-head session-head">
         <a class="back" href="#/">← Personal Sessions</a>
         <div class="shoot-kind">Personal Session</div>
-        <h2>${esc(col.title)}</h2>
-        ${models}
+        <h2>${esc(title)}</h2>
+        ${subtitle ? `<div class="session-identity-subtitle">${esc(subtitle)}</div>` : ''}
+        ${accounts ? `<div class="session-identity-accounts">${accounts}</div>` : ''}
         ${facts ? `<div class="date">${esc(facts)}</div>` : ''}
         ${col.description ? `<div class="desc">${esc(col.description)}</div>` : ''}
         ${related}

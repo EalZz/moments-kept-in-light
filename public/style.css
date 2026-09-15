@@ -524,7 +524,7 @@ html { color-scheme: dark; scrollbar-gutter: stable; } /* 스크롤바 공간 �
 body {
   background: var(--bg);
   color: var(--fg);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo",
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo",
     "Noto Sans KR", sans-serif;
   -webkit-font-smoothing: antialiased;
   line-height: 1.6;
@@ -1111,6 +1111,13 @@ main.wrap { padding-top: 76px; }
   padding-bottom: 2px;
 }
 .card:hover .meta .title { background-size: 100% 1px; }
+.card .session-subtitle {
+  margin-top: 8px;
+  color: var(--fg-faint);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  line-height: 1.35;
+}
 
 /* 홈 컬렉션 분류 — 행사와 개인 세션을 같은 목록 안에서 섞지 않음 */
 .collection-index .col-head { padding-bottom: 42px; }
@@ -1131,16 +1138,17 @@ main.wrap { padding-top: 76px; }
   min-width: 0;
 }
 .collection-block-head h3 {
-  font-family: inherit;
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 1.2;
-  color: var(--fg-faint);
-  letter-spacing: 0.24em;
+  font-family: var(--font-display);
+  font-size: 27px;
+  font-weight: 500;
+  color: var(--fg);
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 .collection-block-head .date {
   margin-top: 0;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo",
+    "Noto Sans KR", sans-serif;
   font-size: 11px;
   color: var(--fg-faint);
   letter-spacing: 0.18em;
@@ -1286,7 +1294,7 @@ main.wrap { padding-top: 76px; }
     padding: 14px 0 18px;
   }
   .collection-block-title { display: block; }
-  .collection-block-head h3 { font-size: 12px; }
+  .collection-block-head h3 { font-size: 22px; }
   .collection-block-title .date { margin-top: 5px; }
   .collection-toggle { bottom: 22px; width: 64px; height: 64px; font-size: 9px; }
   .collection-block--session .collections .mcol { gap: 36px; }
@@ -1384,6 +1392,8 @@ main.wrap { padding-top: 76px; }
 @media (max-width: 640px) {
   .jgrid { gap: 8px; padding-bottom: 40px; }
   .jrow { gap: 8px; }
+  .session-identity-subtitle { margin-top: 12px; font-size: 13px; letter-spacing: 0.07em; }
+  .session-identity-accounts { font-size: 10px; }
 }
 .jrow .ph {
   /* button 요소입니다(키보드로 사진 열기). 기본 버튼 외형은 지우고 타일 모양만 남깁니다. */
@@ -1418,36 +1428,22 @@ main.wrap { padding-top: 76px; }
   text-transform: uppercase;
   margin-bottom: 14px;
 }
-.session-models {
-  display: flex;
-  justify-content: center;
-  flex-wrap: wrap;
-  gap: 20px 36px;
-  margin: 22px auto 0;
-}
-.session-model { min-width: min(100%, 180px); }
-.session-model-name {
+.session-identity-subtitle {
+  margin-top: 16px;
+  color: var(--fg-dim);
   font-family: var(--font-display);
-  font-size: 18px;
-  line-height: 1.2;
-  letter-spacing: 0.04em;
+  font-size: 15px;
+  line-height: 1.35;
+  letter-spacing: 0.1em;
 }
-.session-model-name a { color: inherit; transition: color 0.2s ease; }
-.session-model-name a:hover { color: var(--fg-dim); }
-.session-model-detail {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0 12px;
-  margin-top: 7px;
+.session-identity-accounts {
+  margin-top: 9px;
   color: var(--fg-faint);
   font-size: 11px;
   letter-spacing: 0.06em;
 }
-.session-model-detail a { color: var(--fg-faint); transition: color 0.2s ease; }
-.session-model-detail a:hover { color: var(--fg); }
-.session-model-detail .chr { color: var(--fg-faint); letter-spacing: 0.1em; }
-.session-model-detail .chr:not(.chr--alone)::before { content: '·'; margin-right: 12px; }
+.session-identity-accounts a { color: var(--fg-faint); transition: color 0.2s ease; }
+.session-identity-accounts a:hover { color: var(--fg); }
 .session-head .related-event {
   display: inline-block;
   margin-top: 22px;
