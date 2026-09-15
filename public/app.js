@@ -877,13 +877,27 @@ function sessionGalleryHtml(photos) {
   </div>`
 }
 
-function sessionModelHtml(sections) {
-  if (!sections.length) return ''
-  const models = sections.map((s) => {
+function sessionModelHtml(sections, collectionModel = null) {
+  const directModel = collectionModel && (
+    collectionModel.name || collectionModel.twitter?.length || collectionModel.character
+  ) ? {
+    name: collectionModel.name || '',
+    handles: [].concat(collectionModel.twitter || []).filter(Boolean),
+    modelNames: collectionModel.name ? [collectionModel.name] : [],
+    character: collectionModel.character || '',
+    isCollectionModel: true,
+  } : null
+  const models = directModel ? [directModel] : sections.map((s) => ({
+    ...s,
+    handles: s.handles || [],
+    modelNames: s.modelNames || [],
+  }))
+  if (!models.length) return ''
+  const html = models.map((s) => {
     const handles = s.handles || []
     const names = (s.modelNames || []).filter(Boolean)
-    const displayName = names.join(' & ') || s.name
-    const nameHtml = handles.length === 1
+    const displayName = names.join(' & ') || s.name || handles.map((h) => '@' + h).join(' & ')
+    const nameHtml = !s.isCollectionModel && handles.length === 1
       ? `<a href="#/m/${esc(handles[0])}" title="이 모델 사진 모아보기">${esc(displayName)}</a>`
       : esc(displayName)
     const handleHtml = handles.map((h) =>
@@ -895,7 +909,7 @@ function sessionModelHtml(sections) {
       ${detail ? `<div class="session-model-detail">${detail}</div>` : ''}
     </div>`
   }).join('')
-  return `<div class="session-models" aria-label="Models">${models}</div>`
+  return `<div class="session-models" aria-label="Models">${html}</div>`
 }
 
 async function renderCollection(id, focusGroup = null) {
@@ -916,6 +930,15 @@ async function renderCollection(id, focusGroup = null) {
       if (s.character) p._character = s.character
     })
   }
+  const sessionModel = col.session_model || null
+  if (shootTypeOf(col) === 'session' && sessionModel) {
+    const handles = [].concat(sessionModel.twitter || []).filter(Boolean)
+    for (const p of ungrouped) {
+      if (handles.length) p._models = handles
+      if (sessionModel.name) p._modelNames = [sessionModel.name]
+      if (sessionModel.character) p._character = sessionModel.character
+    }
+  }
   // 라이트박스용 사진 목록: 표시 순서 그대로 하나로 이어붙임 (폴더가 달라져도 계속 넘어감)
   const flat = [...ungrouped, ...sections.flatMap((s) => s.photos)]
   // 행사명은 alt 텍스트와 라이트박스 설명에 쓰입니다(Photos 페이지와 같은 형태로 맞춤).
@@ -924,7 +947,7 @@ async function renderCollection(id, focusGroup = null) {
   if (shootTypeOf(col) === 'session') {
     jSets = null
     const facts = [col.date, locationLabel(col.location_type), `${flat.length} photos`].filter(Boolean).join(' · ')
-    const models = sessionModelHtml(sections)
+    const models = sessionModelHtml(sections, sessionModel)
     const related = col.related_event_id && col.related_event_title
       ? `<a class="related-event" href="#/c/${col.related_event_id}">From Events · ${esc(col.related_event_title)}${col.related_event_date ? ` · ${esc(col.related_event_date)}` : ''} →</a>`
       : ''

@@ -18,6 +18,29 @@ function collectionLocationLabel(value) {
   return ({ venue: '행사장', outdoor: '야외', studio: '스튜디오' }[value] || '')
 }
 
+function parseJsonObject(value) {
+  try {
+    const parsed = JSON.parse(value || '{}')
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function collectionSessionModel(col) {
+  const raw = col?.session_model || parseJsonObject(col?.meta_json).session_model
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { name: '', twitter: [], character: '', series: [] }
+  const list = (value, separator = /[,\s]+/) =>
+    (Array.isArray(value) ? value : String(value || '').split(separator))
+      .map((item) => String(item || '').trim()).filter(Boolean)
+  return {
+    name: String(raw.name || '').trim(),
+    twitter: list(raw.twitter).map((handle) => handle.replace(/^@/, '')).filter(Boolean),
+    character: String(raw.character || '').trim(),
+    series: list(raw.series, /[,\n]+/),
+  }
+}
+
 async function api(path, opts = {}) {
   if (opts.json) {
     opts.body = JSON.stringify(opts.json)
@@ -196,18 +219,24 @@ async function renderCollections() {
       <div class="panel collection-type-panel">
         <h3>${label} <span class="muted">${list.length}개</span></h3>
         <div class="collection-type-list" data-kind="${kind}">
-          ${list.map((c) => `
-            <div class="col-item" data-id="${c.id}">
-              ${c.cover_thumb ? `<img src="/img/${esc(c.cover_thumb)}" />` : '<div class="ph-placeholder"></div>'}
-              <div class="t">
-                <div class="title">${esc(c.title)}</div>
-                <div class="info">${collectionKindLabel(c)}${c.date ? ` · ${esc(c.date)}` : ''}${c.location_type ? ` · ${collectionLocationLabel(c.location_type)}` : ''} · ${c.photo_count}장 · ${c.published === 0 ? '비공개' : '공개'}</div>
-              </div>
-              <div class="ord-btns">
-                <button class="colUp" title="위로">▲</button>
-                <button class="colDown" title="아래로">▼</button>
-              </div>
-            </div>`).join('') || '<p class="muted">아직 등록된 컬렉션이 없습니다.</p>'}
+          ${list.map((c) => {
+            const model = kind === 'session' ? collectionSessionModel(c) : null
+            const modelInfo = model?.name || model?.twitter?.length
+              ? ` · ${esc(model.name || model.twitter.map((handle) => '@' + handle).join(', '))}`
+              : ''
+            return `
+              <div class="col-item" data-id="${c.id}">
+                ${c.cover_thumb ? `<img src="/img/${esc(c.cover_thumb)}" />` : '<div class="ph-placeholder"></div>'}
+                <div class="t">
+                  <div class="title">${esc(c.title)}</div>
+                  <div class="info">${collectionKindLabel(c)}${c.date ? ` · ${esc(c.date)}` : ''}${c.location_type ? ` · ${collectionLocationLabel(c)}` : ''}${modelInfo} · ${c.photo_count}장 · ${c.published === 0 ? '비공개' : '공개'}</div>
+                </div>
+                <div class="ord-btns">
+                  <button class="colUp" title="위로">▲</button>
+                  <button class="colDown" title="아래로">▼</button>
+                </div>
+              </div>`
+          }).join('') || '<p class="muted">아직 등록된 컬렉션이 없습니다.</p>'}
         </div>
       </div>`
   }
@@ -265,6 +294,17 @@ async function renderCollections() {
           <option value="outdoor">야외</option>
           <option value="studio">스튜디오</option>
         </select>
+      </div>
+      <div id="newSessionModelFields" class="session-model-fields" hidden>
+        <div class="row">
+          <input id="newSessionModelName" placeholder="모델명 (예: 메쨩님)" />
+          <input id="newSessionModelHandles" placeholder="모델 X 계정 (예: aaa, bbb)" />
+        </div>
+        <div class="row">
+          <input id="newSessionModelCharacter" placeholder="캐릭터명 (선택)" />
+          <input id="newSessionModelSeries" placeholder="작품·장르 (선택)" />
+        </div>
+        <div class="field-hint">개인 세션은 이 컬렉션 자체가 모델 세션입니다. 사진은 별도 사람 폴더 없이 개인 세션 사진에 바로 올립니다.</div>
       </div>
       <div class="row">
         <select id="newRelatedEvent" aria-label="관련 행사" disabled>
@@ -396,6 +436,12 @@ async function renderCollections() {
         shoot_type: shootType,
         location_type: document.getElementById('newLocationType').value,
         related_event_id: shootType === 'session' ? (document.getElementById('newRelatedEvent').value || null) : null,
+        session_model: shootType === 'session' ? {
+          name: document.getElementById('newSessionModelName').value.trim(),
+          twitter: document.getElementById('newSessionModelHandles').value.trim(),
+          character: document.getElementById('newSessionModelCharacter').value.trim(),
+          series: document.getElementById('newSessionModelSeries').value.trim(),
+        } : null,
       },
     })
     goCollection(id)
@@ -438,10 +484,12 @@ async function renderCollections() {
 
   const newType = document.getElementById('newShootType')
   const relatedEvent = document.getElementById('newRelatedEvent')
+  const newSessionModelFields = document.getElementById('newSessionModelFields')
   const syncNewRelation = () => {
     const enabled = newType.value === 'session'
     relatedEvent.disabled = !enabled
     if (!enabled) relatedEvent.value = ''
+    newSessionModelFields.hidden = !enabled
   }
   newType.addEventListener('change', syncNewRelation)
   syncNewRelation()
@@ -502,11 +550,16 @@ async function openTrash() {
 // 섹션 = 컬렉션 바로 아래(groupId null) + 사람별 폴더들. 섹션마다 드롭존/트윗 가져오기/그리드.
 function sectionHtml(col, group, photos) {
   const gid = group ? group.id : ''
+  const rootModel = !group && col.shoot_type === 'session' ? collectionSessionModel(col) : null
+  const rootLabel = group ? '📁 ' + esc(group.name) : col.shoot_type === 'session' ? '개인 세션 사진' : '행사 바로 아래'
+  const rootModelInfo = rootModel && (rootModel.name || rootModel.twitter.length || rootModel.character)
+    ? ` · ${esc([rootModel.name, ...rootModel.twitter.map((handle) => '@' + handle), rootModel.character].filter(Boolean).join(' · '))}`
+    : ''
   return `
     <div class="panel section" data-gid="${gid}">
       <div class="sec-head">
-        <h3>${group ? '📁 ' + esc(group.name) : '행사 바로 아래'}
-          <span class="muted"><span class="sec-count">${photos.length}장</span>${group && group.meta && group.meta.twitter ? ' · ' + [].concat(group.meta.twitter).map((h) => '@' + esc(h)).join(' ') : ''}${group && group.meta && group.meta.character ? ' · ' + esc(group.meta.character) : ''}</span>
+        <h3>${rootLabel}
+          <span class="muted"><span class="sec-count">${photos.length}장</span>${group && group.meta && group.meta.twitter ? ' · ' + [].concat(group.meta.twitter).map((h) => '@' + esc(h)).join(' ') : ''}${group && group.meta && group.meta.character ? ' · ' + esc(group.meta.character) : ''}${rootModelInfo}</span>
         </h3>
         ${group ? `<div class="r">
           <button class="grpUp" title="폴더 위로">▲</button>
@@ -551,6 +604,7 @@ async function openCollectionEditor(col) {
     .filter((item) => !item.deleted_at && item.shoot_type !== 'session' && String(item.id) !== String(col.id))
     .map((item) => `<option value="${item.id}" ${String(item.id) === String(col.related_event_id) ? 'selected' : ''}>${esc(item.title)}${item.date ? ` · ${esc(item.date)}` : ''}</option>`)
     .join('')
+  const sessionModel = collectionSessionModel(col)
   const overlay = document.createElement('div')
   overlay.className = 'grid-maker'
   overlay.innerHTML = `
@@ -571,6 +625,25 @@ async function openCollectionEditor(col) {
             <option value="studio" ${col.location_type === 'studio' ? 'selected' : ''}>스튜디오</option>
           </select>
         </div>
+        <div id="editSessionModelFields" class="session-model-fields" ${col.shoot_type !== 'session' ? 'hidden' : ''}>
+          <div class="form-field">
+            <label for="editSessionModelName">세션 모델명</label>
+            <input id="editSessionModelName" value="${esc(sessionModel.name)}" placeholder="예: 메쨩님 또는 메쨩님 &amp; 하정님" />
+          </div>
+          <div class="form-field">
+            <label for="editSessionModelHandles">모델 X 계정</label>
+            <input id="editSessionModelHandles" value="${esc(sessionModel.twitter.join(', '))}" placeholder="@ 없이 입력, 여러 명이면 쉼표로 구분" />
+          </div>
+          <div class="form-field">
+            <label for="editSessionModelCharacter">캐릭터명</label>
+            <input id="editSessionModelCharacter" value="${esc(sessionModel.character)}" placeholder="예: 체인소 맨 - 레제 &amp; 덴지" />
+          </div>
+          <div class="form-field">
+            <label for="editSessionModelSeries">작품 (장르)</label>
+            <input id="editSessionModelSeries" value="${esc(sessionModel.series.join(', '))}" placeholder="선택 사항" />
+          </div>
+          <div class="field-hint">개인 세션은 이 컬렉션 자체가 모델 세션입니다. 사진은 별도 사람 폴더 없이 개인 세션 사진에 바로 올립니다.</div>
+        </div>
         <div class="row">
           <select id="editColRelated" aria-label="관련 행사">
             <option value="">관련 행사 없음</option>
@@ -589,13 +662,15 @@ async function openCollectionEditor(col) {
   overlay.addEventListener('click', (event) => { if (event.target === overlay) close() })
   const type = overlay.querySelector('#editColType')
   const related = overlay.querySelector('#editColRelated')
-  const syncRelation = () => {
+  const sessionModelFields = overlay.querySelector('#editSessionModelFields')
+  const syncTypeFields = () => {
     const enabled = type.value === 'session'
     related.disabled = !enabled
     if (!enabled) related.value = ''
+    sessionModelFields.hidden = !enabled
   }
-  type.addEventListener('change', syncRelation)
-  syncRelation()
+  type.addEventListener('change', syncTypeFields)
+  syncTypeFields()
   overlay.querySelector('#editColSave').addEventListener('click', async () => {
     const title = overlay.querySelector('#editColTitle').value.trim()
     if (!title) return alert('제목을 입력하세요')
@@ -611,6 +686,12 @@ async function openCollectionEditor(col) {
           shoot_type: type.value,
           location_type: overlay.querySelector('#editColLocation').value,
           related_event_id: type.value === 'session' ? (related.value || null) : null,
+          session_model: type.value === 'session' ? {
+            name: overlay.querySelector('#editSessionModelName').value.trim(),
+            twitter: overlay.querySelector('#editSessionModelHandles').value.trim(),
+            character: overlay.querySelector('#editSessionModelCharacter').value.trim(),
+            series: overlay.querySelector('#editSessionModelSeries').value.trim(),
+          } : null,
         },
       })
       close()
@@ -754,7 +835,7 @@ async function renderCollection(id) {
             <button id="editColBtn">정보 수정</button>
             <button id="publishBtn">${col.published === 0 ? '공개하기' : '비공개로 전환'}</button>
             <button id="featureBtn">${isFeatured ? '메인 해제' : '메인에 걸기'}</button>
-            <button id="newGrpBtn">+ 사람 폴더</button>
+            ${col.shoot_type === 'session' ? '' : '<button id="newGrpBtn">+ 사람 폴더</button>'}
             <button id="gridBtn">그리드 이미지</button>
             <button class="danger" id="delColBtn">컬렉션 삭제</button>
           </div>
@@ -780,7 +861,7 @@ async function renderCollection(id) {
     await api('/collections/' + id, { method: 'PATCH', json: { published } })
     renderCollection(id)
   })
-  document.getElementById('newGrpBtn').addEventListener('click', async () => {
+  document.getElementById('newGrpBtn')?.addEventListener('click', async () => {
     const name = prompt('폴더 이름 (예: 인물/캐릭터 이름)')
     if (!name || !name.trim()) return
     await api(`/collections/${id}/groups`, { method: 'POST', json: { name: name.trim() } })

@@ -49,6 +49,33 @@ function parseJsonObject(value) {
   }
 }
 
+function listMetaValues(value, separator = /[,\s]+/) {
+  const values = Array.isArray(value) ? value : String(value || '').split(separator)
+  return values.map((item) => String(item || '').trim()).filter(Boolean)
+}
+
+function normalizeSessionModel(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const model = {
+    name: String(value.name || '').trim(),
+    twitter: listMetaValues(value.twitter).map((handle) => handle.replace(/^@/, '')).filter(Boolean),
+    character: String(value.character || '').trim(),
+    series: listMetaValues(value.series, /[,\n]+/).map(normalizeSeries).filter(Boolean),
+  }
+  return model.name || model.twitter.length || model.character || model.series.length ? model : null
+}
+
+function sessionModelOf(meta) {
+  return normalizeSessionModel(meta?.session_model)
+}
+
+function resolvedSessionModelNames(model, handles, modelNames) {
+  const parts = String(model?.name || '').split('&').map((part) => part.trim()).filter(Boolean)
+  return handles.map((handle, index) =>
+    modelNames[handle.toLowerCase()] || (handles.length === 1 ? model?.name || '' : parts[index] || '')
+  )
+}
+
 // 작품명 표기 통일. 같은 작품이 공백 차이로 갈라지지 않게 합니다.
 // 예: '승리의 여신 : 니케' → '승리의 여신: 니케' (공식 표기)
 export function normalizeSeries(value) {
@@ -298,6 +325,7 @@ app.get('/api/collections', async (c) => {
   const groupOrderByCol = {}
   for (const g of groupRows) (groupOrderByCol[g.collection_id] ||= []).push(g.id)
   for (const r of results) {
+    if (r.shoot_type === 'session') r.session_model = sessionModelOf(parseJsonObject(r.meta_json))
     r.cover_thumb = r.cover_thumb || r.first_thumb
     r.cover_large = r.cover_large || r.first_large
     // medium이 없는 예전 사진은 large로 폴백합니다.
@@ -331,11 +359,12 @@ app.post('/api/collections', requireAdmin, async (c) => {
   if (!title) return c.json({ error: 'title required' }, 400)
   const typeFields = await collectionTypeFields(c.env.DB, body)
   if (typeFields.error) return c.json({ error: typeFields.error }, 400)
+  const sessionModel = typeFields.shootType === 'session' ? normalizeSessionModel(body.session_model) : null
   const { meta } = await c.env.DB.prepare(
     `INSERT INTO collections
-       (title, date, description, published, shoot_type, location_type, related_event_id)
-     VALUES (?, ?, ?, 0, ?, ?, ?)`
-  ).bind(title, date, description, typeFields.shootType, typeFields.locationType, typeFields.relatedEventId).run()
+       (title, date, description, meta_json, published, shoot_type, location_type, related_event_id)
+     VALUES (?, ?, ?, ?, 0, ?, ?, ?)`
+  ).bind(title, date, description, JSON.stringify(sessionModel ? { session_model: sessionModel } : {}), typeFields.shootType, typeFields.locationType, typeFields.relatedEventId).run()
   return c.json({ id: meta.last_row_id })
 })
 
@@ -363,6 +392,7 @@ app.get('/api/collections/:id', async (c) => {
   }
   const { results: modelNameRows } = await c.env.DB.prepare('SELECT handle, name FROM model_names').all()
   const modelNames = Object.fromEntries(modelNameRows.map((row) => [row.handle.toLowerCase(), row.name]))
+  col.session_model = sessionModelOf(parseJsonObject(col.meta_json))
   for (const g of groups) {
     const handles = [].concat(g.meta.twitter || [])
     g.model_names = handles.map((handle) => modelNames[handle.toLowerCase()] || (handles.length === 1 ? g.name : ''))
@@ -902,9 +932,10 @@ app.get('/api/photos', async (c) => {
   const limit = Math.min(100, +(c.req.query('limit') || 60) || 60)
   const offset = Math.max(0, +(c.req.query('offset') || 0) || 0)
   const { results } = await c.env.DB.prepare(
-    `SELECT p.key_thumb, p.key_large, p.key_medium, p.width, p.height, p.collection_id,
+    `SELECT p.key_thumb, p.key_large, p.key_medium, p.width, p.height, p.collection_id, p.group_id,
             p.taken_at, p.exif_json,
-            col.title, g.name AS group_name, g.meta_json AS g_meta
+            col.title, col.shoot_type, col.meta_json AS col_meta,
+            g.name AS group_name, g.meta_json AS g_meta
      FROM photos p
      JOIN collections col ON col.id = p.collection_id
      LEFT JOIN groups g ON g.id = p.group_id
@@ -927,7 +958,14 @@ app.get('/api/photos', async (c) => {
     total: totalRow ? totalRow.n : null,
     photos: results.map((r) => {
       const meta = parseJsonObject(r.g_meta)
-      const handles = [].concat(meta.twitter || [])
+      const collectionModel = r.shoot_type === 'session' && r.group_id == null
+        ? sessionModelOf(parseJsonObject(r.col_meta))
+        : null
+      const handles = collectionModel ? collectionModel.twitter : listMetaValues(meta.twitter)
+      const modelNamesForPhoto = collectionModel
+        ? resolvedSessionModelNames(collectionModel, handles, modelNames)
+        : handles.map((handle) => modelNames[handle.toLowerCase()] || (handles.length === 1 ? r.group_name : ''))
+      const character = collectionModel?.character || meta.character || ''
       return {
         key_thumb: r.key_thumb,
         key_large: r.key_large,
@@ -940,9 +978,9 @@ app.get('/api/photos', async (c) => {
         collection_id: r.collection_id,
         title: r.title,
         models: handles,
-        model_names: handles.map((handle) => modelNames[handle.toLowerCase()] || (handles.length === 1 ? r.group_name : '')),
-        character: meta.character || '',
-        series: seriesOf(meta),
+        model_names: modelNamesForPhoto,
+        character,
+        series: collectionModel ? seriesOf(collectionModel) : seriesOf(meta),
       }
     }),
   }, 200, apiCacheHeaders(includeDrafts))
@@ -955,7 +993,9 @@ const FEATURE_SAMPLE_SIZE = 40
 app.get('/api/feature-photos', async (c) => {
   const includeDrafts = await isAdmin(c)
   const { results } = await c.env.DB.prepare(
-    `SELECT p.key_large, p.key_medium, p.collection_id, p.group_id, col.title, col.shoot_type, g.name AS group_name, g.meta_json AS g_meta
+    `SELECT p.key_large, p.key_medium, p.collection_id, p.group_id,
+            col.title, col.shoot_type, col.meta_json AS col_meta,
+            g.name AS group_name, g.meta_json AS g_meta
      FROM photos p
      JOIN collections col ON col.id = p.collection_id
      LEFT JOIN groups g ON g.id = p.group_id
@@ -966,7 +1006,13 @@ app.get('/api/feature-photos', async (c) => {
   const modelNames = Object.fromEntries(modelNameRows.map((row) => [row.handle.toLowerCase(), row.name]))
   return c.json(results.map((r) => {
     const meta = parseJsonObject(r.g_meta)
-    const handles = [].concat(meta.twitter || [])
+    const collectionModel = r.shoot_type === 'session' && r.group_id == null
+      ? sessionModelOf(parseJsonObject(r.col_meta))
+      : null
+    const handles = collectionModel ? collectionModel.twitter : listMetaValues(meta.twitter)
+    const modelNamesForPhoto = collectionModel
+      ? resolvedSessionModelNames(collectionModel, handles, modelNames)
+      : handles.map((handle) => modelNames[handle.toLowerCase()] || (handles.length === 1 ? r.group_name : ''))
     return {
       key_large: r.key_large,
       key_medium: r.key_medium || r.key_large,
@@ -975,9 +1021,9 @@ app.get('/api/feature-photos', async (c) => {
       title: r.title,
       shoot_type: r.shoot_type || 'event',
       models: handles,
-      model_names: handles.map((handle) => modelNames[handle.toLowerCase()] || (handles.length === 1 ? r.group_name : '')),
-      character: meta.character || '',
-      series: seriesOf(meta),
+      model_names: modelNamesForPhoto,
+      character: collectionModel?.character || meta.character || '',
+      series: collectionModel ? seriesOf(collectionModel) : seriesOf(meta),
     }
   }), 200, apiCacheHeaders(includeDrafts))
 })
@@ -1349,9 +1395,10 @@ app.patch('/api/collections/:id', requireAdmin, async (c) => {
     if (!photo) return c.json({ error: 'cover photo does not belong to collection' }, 400)
   }
   let typeFields = null
-  if (['shoot_type', 'location_type', 'related_event_id'].some((field) => field in body)) {
-    const existing = await c.env.DB.prepare(
-      'SELECT id, shoot_type, location_type, related_event_id FROM collections WHERE id = ? AND deleted_at IS NULL'
+  let existing = null
+  if (['shoot_type', 'location_type', 'related_event_id', 'session_model'].some((field) => field in body)) {
+    existing = await c.env.DB.prepare(
+      'SELECT id, shoot_type, location_type, related_event_id, meta_json FROM collections WHERE id = ? AND deleted_at IS NULL'
     ).bind(id).first()
     if (!existing) return c.json({ error: 'not found' }, 404)
     typeFields = await collectionTypeFields(c.env.DB, body, existing, id)
@@ -1365,6 +1412,16 @@ app.patch('/api/collections/:id', requireAdmin, async (c) => {
       sets.push(`${f} = ?`)
       vals.push(f === 'published' ? (body[f] ? 1 : 0) : typeFields && f === 'shoot_type' ? typeFields.shootType : typeFields && f === 'location_type' ? typeFields.locationType : typeFields && f === 'related_event_id' ? typeFields.relatedEventId : body[f])
     }
+  }
+  if ('session_model' in body) {
+    const metadata = parseJsonObject(existing.meta_json)
+    const sessionModel = (typeFields?.shootType || existing.shoot_type) === 'session'
+      ? normalizeSessionModel(body.session_model)
+      : null
+    if (sessionModel) metadata.session_model = sessionModel
+    else delete metadata.session_model
+    sets.push('meta_json = ?')
+    vals.push(JSON.stringify(metadata))
   }
   // 개인 세션에서 행사로 바꾸면서 relation을 생략한 경우에도 일관된 상태로 저장합니다.
   if (typeFields && body.shoot_type === 'event' && !('related_event_id' in body)) {

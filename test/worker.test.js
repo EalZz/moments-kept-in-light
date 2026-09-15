@@ -178,6 +178,12 @@ describe('collection types and home settings', () => {
         shoot_type: 'session',
         location_type: 'outdoor',
         related_event_id: eventId,
+        session_model: {
+          name: '메쨩님',
+          twitter: '@reze_model',
+          character: '체인소 맨 - 레제',
+          series: '체인소 맨',
+        },
       }),
     })
     expect(created.status).toBe(200)
@@ -187,6 +193,30 @@ describe('collection types and home settings', () => {
     expect(detail.location_type).toBe('outdoor')
     expect(detail.related_event_id).toBe(eventId)
     expect(detail.related_event_title).toBe('Related event')
+    expect(detail.groups).toEqual([])
+    expect(detail.session_model).toEqual({
+      name: '메쨩님',
+      twitter: ['reze_model'],
+      character: '체인소 맨 - 레제',
+      series: ['체인소 맨'],
+    })
+
+    const list = await (await SELF.fetch('https://example.com/api/collections', { headers: { Cookie: cookie } })).json()
+    expect(list.find((collection) => collection.id === id).session_model).toEqual(detail.session_model)
+
+    const updated = await SELF.fetch(`https://example.com/api/collections/${id}`, {
+      method: 'PATCH',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_model: { name: '하정님', twitter: 'hajung_model' } }),
+    })
+    expect(updated.status).toBe(200)
+    const updatedDetail = await (await SELF.fetch(`https://example.com/api/collections/${id}`, { headers: { Cookie: cookie } })).json()
+    expect(updatedDetail.session_model).toEqual({
+      name: '하정님',
+      twitter: ['hajung_model'],
+      character: '',
+      series: [],
+    })
   })
 
   it('rejects invalid collection type metadata and defaults old rows to events', async () => {
