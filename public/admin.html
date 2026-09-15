@@ -25,6 +25,13 @@
     .col-item .t .info { font-size: 12px; color: var(--fg-faint); }
     .col-item .ord-btns { display: flex; gap: 4px; }
     .col-item .ord-btns button { font-size: 11px; padding: 3px 8px; }
+    .home-order-panel .sec-head { align-items: center; }
+    .home-order-control { display: flex; align-items: center; gap: 8px; }
+    .home-order-control select { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 8px 10px; min-width: 230px; }
+    .home-order-control button { white-space: nowrap; }
+    .home-order-status { color: var(--fg-faint); font-size: 11px; min-width: 64px; }
+    .collection-type-panel .sec-head { margin-bottom: 4px; }
+    .collection-type-panel + .collection-type-panel { margin-top: 24px; }
     .dropzone { border: 2px dashed var(--border); border-radius: 8px; padding: 48px 24px; text-align: center; color: var(--fg-faint); font-size: 13px; letter-spacing: 0.05em; cursor: pointer; transition: border-color .2s, color .2s; }
     .dropzone.drag { border-color: var(--fg-dim); color: var(--fg-dim); }
     .upload-status { font-size: 12px; color: var(--fg-dim); margin-top: 12px; }
@@ -158,6 +165,9 @@
       .topbar { align-items: flex-start; gap: 12px; } .topbar .r { justify-content: flex-end; }
       .row { flex-wrap: wrap; } .row select { min-width: 140px; }
       .field-hint { flex-basis: 100%; }
+      .home-order-panel .sec-head { align-items: flex-start; flex-direction: column; gap: 12px; }
+      .home-order-control { width: 100%; }
+      .home-order-control select { flex: 1; min-width: 0; }
       .alias-add { width: 100%; } .alias-add input { width: 100%; }
       .admin-ph .acts { gap: 4px; padding: 6px; }
       .admin-ph .acts button { font-size: 10px; padding: 4px 6px; }

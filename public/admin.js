@@ -175,15 +175,42 @@ async function boot() {
 async function renderCollections() {
   selectedPhotos.clear() // 목록으로 나가면 사진 선택은 유지하지 않습니다.
   selectionCollectionId = null
-  const [allCols, stats] = await Promise.all([api('/collections'), api('/stats')])
+  const [allCols, stats, homeSettings] = await Promise.all([
+    api('/collections'), api('/stats'), api('/settings'),
+  ])
   const cols = allCols.filter((c) => !c.deleted_at)
   const eventCols = cols.filter((c) => c.shoot_type !== 'session')
+  const sessionCols = cols.filter((c) => c.shoot_type === 'session')
+  const selectedHomeOrder = homeSettings.home_section_order === 'sessions_first'
+    ? 'sessions_first'
+    : 'events_first'
   const relatedEventOptions = eventCols.map((c) =>
     `<option value="${c.id}">${esc(c.title)}${c.date ? ` · ${esc(c.date)}` : ''}</option>`).join('')
   const daily = stats.daily || []
   const maxViews = Math.max(1, ...daily.map((d) => d.views))
   const firstDate = daily[0]?.view_date?.slice(5).replace('-', '.') || ''
   const lastDate = daily.at(-1)?.view_date?.slice(5).replace('-', '.') || ''
+  const collectionListPanel = (kind, list) => {
+    const label = kind === 'session' ? '개인 세션' : '행사'
+    return `
+      <div class="panel collection-type-panel">
+        <h3>${label} <span class="muted">${list.length}개</span></h3>
+        <div class="collection-type-list" data-kind="${kind}">
+          ${list.map((c) => `
+            <div class="col-item" data-id="${c.id}">
+              ${c.cover_thumb ? `<img src="/img/${esc(c.cover_thumb)}" />` : '<div class="ph-placeholder"></div>'}
+              <div class="t">
+                <div class="title">${esc(c.title)}</div>
+                <div class="info">${collectionKindLabel(c)}${c.date ? ` · ${esc(c.date)}` : ''}${c.location_type ? ` · ${collectionLocationLabel(c.location_type)}` : ''} · ${c.photo_count}장 · ${c.published === 0 ? '비공개' : '공개'}</div>
+              </div>
+              <div class="ord-btns">
+                <button class="colUp" title="위로">▲</button>
+                <button class="colDown" title="아래로">▼</button>
+              </div>
+            </div>`).join('') || '<p class="muted">아직 등록된 컬렉션이 없습니다.</p>'}
+        </div>
+      </div>`
+  }
   app.innerHTML = `
     <div class="topbar">
       <h2>컬렉션 관리</h2>
@@ -201,7 +228,6 @@ async function renderCollections() {
           <button id="modelMgrBtn">모델 관리</button>
           <button id="seriesMgrBtn">작품·검색어 관리</button>
           <button id="aboutBtn">About 편집</button>
-          <button id="homeSettingsBtn">홈 구성 설정</button>
           <button id="galleryBtn">갤러리 보기</button>
           <button id="logoutBtn">로그아웃</button>
         </div>
@@ -250,25 +276,42 @@ async function renderCollections() {
       <div class="row"><input id="newDesc" placeholder="설명 (선택)" /></div>
       <button class="primary" id="createBtn">만들기</button>
     </div>
-    <div class="panel">
-      <h3>컬렉션 ${cols.length}개</h3>
-      <div id="colList">
-        ${cols.map((c) => `
-          <div class="col-item" data-id="${c.id}">
-            ${c.cover_thumb ? `<img src="/img/${esc(c.cover_thumb)}" />` : '<div class="ph-placeholder"></div>'}
-            <div class="t">
-              <div class="title">${esc(c.title)}</div>
-              <div class="info">${collectionKindLabel(c)}${c.date ? ` · ${esc(c.date)}` : ''}${c.location_type ? ` · ${collectionLocationLabel(c.location_type)}` : ''} · ${c.photo_count}장 · ${c.published === 0 ? '비공개' : '공개'}</div>
-            </div>
-            <div class="ord-btns">
-              <button class="colUp" title="위로">▲</button>
-              <button class="colDown" title="아래로">▼</button>
-            </div>
-          </div>`).join('') || '<p class="muted">아직 컬렉션이 없습니다. 위에서 만들어보세요.</p>'}
+    <div class="panel home-order-panel">
+      <div class="sec-head">
+        <div>
+          <h3>홈 섹션 순서</h3>
+          <div class="muted">방문자 홈에서 Events와 Personal Sessions가 표시되는 순서</div>
+        </div>
+        <div class="home-order-control">
+          <select id="homeSectionOrder" aria-label="홈 섹션 순서">
+            <option value="events_first" ${selectedHomeOrder === 'events_first' ? 'selected' : ''}>Events 먼저</option>
+            <option value="sessions_first" ${selectedHomeOrder === 'sessions_first' ? 'selected' : ''}>Personal Sessions 먼저</option>
+          </select>
+          <button class="primary" id="homeSectionOrderSave">저장</button>
+          <span class="home-order-status" id="homeOrderStatus" role="status"></span>
+        </div>
       </div>
-    </div>`
+    </div>
+    ${collectionListPanel('event', eventCols)}
+    ${collectionListPanel('session', sessionCols)}`
 
   setupAdminMenu()
+  const homeOrderSelect = document.getElementById('homeSectionOrder')
+  const homeOrderSave = document.getElementById('homeSectionOrderSave')
+  const homeOrderStatus = document.getElementById('homeOrderStatus')
+  homeOrderSave.addEventListener('click', async () => {
+    homeOrderSave.disabled = true
+    homeOrderStatus.textContent = '저장 중…'
+    try {
+      await api('/settings', { method: 'PATCH', json: { home_section_order: homeOrderSelect.value } })
+      homeOrderStatus.textContent = '저장됨'
+    } catch (error) {
+      homeOrderStatus.textContent = ''
+      alert('홈 섹션 순서 저장 실패: ' + error.message)
+    } finally {
+      homeOrderSave.disabled = false
+    }
+  })
   document.getElementById('backupBtn').addEventListener('click', async () => {
     try { await downloadBackup() } catch (e) { alert('백업 다운로드 실패: ' + e.message) }
   })
@@ -336,7 +379,6 @@ async function renderCollections() {
   document.getElementById('modelMgrBtn').addEventListener('click', openModelManager)
   document.getElementById('seriesMgrBtn').addEventListener('click', openSeriesManager)
   document.getElementById('aboutBtn').addEventListener('click', openAboutEditor)
-  document.getElementById('homeSettingsBtn').addEventListener('click', openHomeSettings)
   document.getElementById('galleryBtn').addEventListener('click', () => { location.href = '/' })
   document.getElementById('logoutBtn').addEventListener('click', async () => {
     await api('/logout', { method: 'POST' }); boot()
@@ -362,12 +404,24 @@ async function renderCollections() {
     el.addEventListener('click', () => goCollection(el.dataset.id)))
 
   // 컬렉션 순서 이동 (▲▼) — 클릭이 컬렉션 열기로 번지지 않게 차단
+  const orderedByKind = {
+    event: eventCols.slice(),
+    session: sessionCols.slice(),
+  }
   const moveCollection = async (cid, dir) => {
-    const ids = cols.map((c) => c.id)
-    const i = ids.indexOf(cid)
+    const current = cols.find((c) => String(c.id) === String(cid))
+    if (!current) return
+    const kind = current.shoot_type === 'session' ? 'session' : 'event'
+    const ordered = orderedByKind[kind]
+    const i = ordered.findIndex((c) => String(c.id) === String(cid))
     const j = i + dir
-    if (i < 0 || j < 0 || j >= ids.length) return
-    ;[ids[i], ids[j]] = [ids[j], ids[i]]
+    if (i < 0 || j < 0 || j >= ordered.length) return
+    ;[ordered[i], ordered[j]] = [ordered[j], ordered[i]]
+    const offsets = { event: 0, session: 0 }
+    const ids = cols.map((c) => {
+      const currentKind = c.shoot_type === 'session' ? 'session' : 'event'
+      return orderedByKind[currentKind][offsets[currentKind]++].id
+    })
     await api('/collection-order', { method: 'PUT', json: { ids } })
     renderCollections()
   }
@@ -589,39 +643,6 @@ function createAdminDialog(title, content) {
   overlay.addEventListener('click', (event) => { if (event.target === overlay) close() })
   document.addEventListener('keydown', onKey)
   return { overlay, close }
-}
-
-async function openHomeSettings() {
-  let settings
-  try {
-    settings = await api('/settings')
-  } catch (error) {
-    alert('홈 구성 설정을 읽지 못했습니다: ' + error.message)
-    return
-  }
-  const selected = settings.home_section_order === 'sessions_first' ? 'sessions_first' : 'events_first'
-  const { overlay, close } = createAdminDialog('홈 구성 설정', `
-    <div class="form-field">
-      <label>홈 컬렉션 섹션 순서</label>
-      <label class="move-option"><input type="radio" name="homeSectionOrder" value="events_first" style="width:auto" ${selected === 'events_first' ? 'checked' : ''} /><span>Events 먼저, Personal Sessions 다음</span></label>
-      <label class="move-option"><input type="radio" name="homeSectionOrder" value="sessions_first" style="width:auto" ${selected === 'sessions_first' ? 'checked' : ''} /><span>Personal Sessions 먼저, Events 다음</span></label>
-      <div class="field-hint">두 유형은 항상 별도 섹션으로 표시되며, 여기서는 위아래 순서만 바뀝니다.</div>
-    </div>
-    <div class="dialog-actions"><button type="button" class="dialogCancel">취소</button><button type="button" class="primary dialogSave">저장</button></div>`)
-  overlay.querySelector('.dialogCancel').addEventListener('click', close)
-  overlay.querySelector('.dialogSave').addEventListener('click', async () => {
-    const button = overlay.querySelector('.dialogSave')
-    const value = overlay.querySelector('input[name="homeSectionOrder"]:checked').value
-    button.disabled = true
-    try {
-      await api('/settings', { method: 'PATCH', json: { home_section_order: value } })
-      close()
-      alert('홈 구성 순서를 저장했습니다.')
-    } catch (error) {
-      alert('홈 구성 설정 저장 실패: ' + error.message)
-      button.disabled = false
-    }
-  })
 }
 
 function openGroupEditor(group, onSaved) {

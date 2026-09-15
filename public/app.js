@@ -877,6 +877,27 @@ function sessionGalleryHtml(photos) {
   </div>`
 }
 
+function sessionModelHtml(sections) {
+  if (!sections.length) return ''
+  const models = sections.map((s) => {
+    const handles = s.handles || []
+    const names = (s.modelNames || []).filter(Boolean)
+    const displayName = names.join(' & ') || s.name
+    const nameHtml = handles.length === 1
+      ? `<a href="#/m/${esc(handles[0])}" title="이 모델 사진 모아보기">${esc(displayName)}</a>`
+      : esc(displayName)
+    const handleHtml = handles.map((h) =>
+      `<a href="https://x.com/${esc(h)}" target="_blank" rel="noopener">@${esc(h)} ↗</a>`).join(', ')
+    const detail = [handleHtml, s.character ? `<span class="chr${handles.length ? '' : ' chr--alone'}">${esc(s.character)}</span>` : '']
+      .filter(Boolean).join('')
+    return `<div class="session-model">
+      <div class="session-model-name">${nameHtml}</div>
+      ${detail ? `<div class="session-model-detail">${detail}</div>` : ''}
+    </div>`
+  }).join('')
+  return `<div class="session-models" aria-label="Models">${models}</div>`
+}
+
 async function renderCollection(id, focusGroup = null) {
   const col = await api('/collections/' + id)
   const ungrouped = col.photos.filter((p) => !p.group_id)
@@ -903,6 +924,7 @@ async function renderCollection(id, focusGroup = null) {
   if (shootTypeOf(col) === 'session') {
     jSets = null
     const facts = [col.date, locationLabel(col.location_type), `${flat.length} photos`].filter(Boolean).join(' · ')
+    const models = sessionModelHtml(sections)
     const related = col.related_event_id && col.related_event_title
       ? `<a class="related-event" href="#/c/${col.related_event_id}">From Events · ${esc(col.related_event_title)}${col.related_event_date ? ` · ${esc(col.related_event_date)}` : ''} →</a>`
       : ''
@@ -911,6 +933,7 @@ async function renderCollection(id, focusGroup = null) {
         <a class="back" href="#/">← Personal Sessions</a>
         <div class="shoot-kind">Personal Session</div>
         <h2>${esc(col.title)}</h2>
+        ${models}
         ${facts ? `<div class="date">${esc(facts)}</div>` : ''}
         ${col.description ? `<div class="desc">${esc(col.description)}</div>` : ''}
         ${related}
