@@ -1,7 +1,7 @@
 # 🚀 처음부터 따라 하는 설치 가이드
 
-코딩을 몰라도 순서대로 따라 하면 **나만의 사진 포트폴리오 사이트**를 무료로 띄울 수 있어요.
-전부 무료 요금제 안에서 됩니다. 예상 소요 시간 **30분~1시간**.
+코딩을 몰라도 순서대로 따라 하면 **나만의 사진 포트폴리오 사이트**를 띄울 수 있어요.
+Cloudflare 요금제와 사용량에 따라 비용이 달라질 수 있습니다. 예상 소요 시간은 **30분~1시간**입니다.
 
 > 💡 Claude Code / Codex 같은 AI 도구를 쓴다면, 각 단계의 명령어를 그대로 붙여넣거나
 > "이 폴더에서 ○○ 해줘"라고 부탁하면 돼요. (→ [부록 D](#부록-d-ai-도구-claude-codecodex-로-할-때))
@@ -16,7 +16,7 @@
 4. Cloudflare에 **데이터베이스(D1)** 와 **사진 저장소(R2)** 만들기
 5. 설정 파일에 이름/주소 채우기
 6. 배포 → 나만의 주소 `https://내이름.내계정.workers.dev` 완성
-7. `/admin`에서 사진 업로드
+7. `/admin`에서 행사 또는 개인 세션을 만들고 사진 업로드
 
 ---
 
@@ -86,20 +86,21 @@ npx wrangler d1 create my-portfolio-db
 
 ### R2 (사진 파일 저장소)
 1. 먼저 대시보드에서 **R2를 한 번 켜야 해요**: https://dash.cloudflare.com → 왼쪽 **R2** → 안내에 따라 활성화
-   (무료 요금제라도 카드 등록을 요구할 수 있는데, **무료 한도 안에서는 청구되지 않아요**.)
-2. 버킷 생성:
+   (R2의 요금과 무료 제공량은 Cloudflare의 현재 요금제와 사용량 기준을 확인하세요.)
+2. 사진 버킷과 백업 버킷을 생성합니다:
    ```bash
    npx wrangler r2 bucket create my-portfolio-photos
+   npx wrangler r2 bucket create my-portfolio-backups
    ```
 
-> 이름(`my-portfolio-db`, `my-portfolio-photos`)은 원하는 대로 바꿔도 되고,
+> 이름(`my-portfolio-db`, `my-portfolio-photos`, `my-portfolio-backups`)은 원하는 대로 바꿔도 되고,
 > 아래 설정 파일에 **똑같이** 적어주기만 하면 됩니다.
 
 ---
 
 ## 6단계 · 설정 파일 수정 (`wrangler.jsonc`)
 
-프로젝트 폴더의 **`wrangler.jsonc`** 를 텍스트 편집기로 열고 3곳을 내 것으로 바꿉니다:
+프로젝트 폴더의 **`wrangler.jsonc`** 를 텍스트 편집기로 열고 내 리소스에 맞게 이름과 ID를 바꿉니다:
 
 ```jsonc
 {
@@ -109,20 +110,25 @@ npx wrangler d1 create my-portfolio-db
     {
       "binding": "DB",               // ← ❌ 절대 바꾸지 마세요
       "database_name": "my-portfolio-db",                 // ← ✅ 5단계에서 만든 D1 이름
-      "database_id": "여기에-복사한-database_id-붙여넣기"   // ← ✅ 5단계 출력값
+      "database_id": "여기에-복사한-database_id-붙여넣기",  // ← ✅ 5단계 출력값
+      "migrations_dir": "./migrations"
     }
   ],
   "r2_buckets": [
     {
       "binding": "PHOTOS",           // ← ❌ 절대 바꾸지 마세요
       "bucket_name": "my-portfolio-photos"                // ← ✅ 5단계에서 만든 R2 이름
+    },
+    {
+      "binding": "BACKUPS",           // ← ❌ 절대 바꾸지 마세요
+      "bucket_name": "my-portfolio-backups"                // ← ✅ 5단계에서 만든 R2 이름
     }
   ]
 }
 ```
 
-⚠️ **`binding`(DB, PHOTOS, ASSETS)은 코드가 쓰는 이름이라 절대 바꾸면 안 돼요.**
-바꾸는 건 `name`, `database_name`, `database_id`, `bucket_name` 네 개뿐입니다.
+⚠️ **`binding`(DB, PHOTOS, BACKUPS, ASSETS)은 코드가 쓰는 이름이라 절대 바꾸면 안 돼요.**
+바꾸는 것은 `name`, `database_name`, `database_id`, `bucket_name`처럼 내 리소스에 해당하는 값입니다.
 
 ---
 
@@ -147,6 +153,9 @@ ADMIN_PASSWORD=아무거나-테스트비번
 ## 8단계 · 배포하기 🚀
 
 ```bash
+# 적용할 마이그레이션을 먼저 확인
+npx wrangler d1 migrations list DB --remote
+
 # 데이터베이스 구조 적용
 npx wrangler d1 migrations apply DB --remote
 
@@ -161,7 +170,10 @@ npx wrangler deploy
   ```
   https://my-portfolio.mynickname.workers.dev
   ```
-  이게 **내 사이트 주소**예요! 🎉
+  이게 **내 사이트 주소**예요!
+
+> 코드 배포는 Worker와 정적 파일을 올리는 작업입니다. D1 컬렉션 정보와 R2 사진은 자동으로 업로드되지 않으므로,
+> 새 사이트의 `/admin`에서 별도로 사진을 올려야 합니다.
 
 ---
 
@@ -169,11 +181,24 @@ npx wrangler deploy
 
 1. `내주소/#/` 로 접속 → 사이트 확인
 2. `내주소/admin` 접속 → 7단계 비밀번호로 로그인
-3. **새 컬렉션** 만들기(행사 단위) → 드래그&드롭으로 사진 업로드
+3. **새 컬렉션**을 만들고 촬영 유형을 선택합니다.
+   - **Event**: 행사에서 여러 모델을 촬영한 묶음
+   - **Personal Session**: 행사 중 개인촬영 또는 야외·스튜디오 촬영
+   - 장소 유형은 행사장·야외·스튜디오 중에서 지정할 수 있습니다.
+   - 행사 중 개인촬영이라면 관련 Event 컬렉션을 연결할 수 있습니다.
+   그 다음 드래그&드롭으로 사진을 업로드합니다.
    - 트윗 URL 붙여넣기로 X(트위터) 사진도 바로 가져올 수 있어요
 4. 사진 정리와 대표 지정이 끝나면 **공개하기** 버튼을 누릅니다.
 5. 삭제한 사진과 컬렉션은 관리자 화면의 **휴지통**에서 복구하거나 영구 삭제할 수 있습니다.
-6. 중요한 수정 전에는 관리자 화면의 **백업(JSON)** 버튼으로 메타데이터를 내려받아 보관하세요.
+6. 중요한 수정 전에는 관리자 화면의 **백업**을 실행해 D1 메타데이터와 R2 사진을 함께 보관하세요.
+7. 관리자 사이트 설정에서 홈의 Events / Personal Sessions 섹션 순서를 바꿀 수 있습니다.
+
+### 홈과 상세 페이지에서 보이는 방식
+
+- Events는 대표 사진과 미리보기 사진을 함께 보여줍니다.
+- Personal Sessions는 대표 사진 중심으로 보여주고, 상세 페이지에서는 대표 사진 1장과 에디토리얼 갤러리를 사용합니다.
+- 홈 목록은 앨범 수가 아니라 화면 높이를 기준으로 접습니다. 경계 아래는 페이드와 블러로 자연스럽게 가려지고,
+  화살표를 누르면 애니메이션과 함께 전체 목록이 열리거나 닫힙니다.
 
 ---
 
@@ -268,7 +293,8 @@ window.SITE = {
 | `wrangler: command not found` | `npx wrangler ...` 처럼 앞에 `npx` 붙이기 |
 | R2 버킷 생성 오류 | 대시보드에서 **R2 활성화** 먼저 (5단계) |
 | `/admin` 로그인 안 됨 | 7단계 `wrangler secret put ADMIN_PASSWORD` 했는지 확인 |
-| 사진 업로드 실패 | `wrangler.jsonc`의 `bucket_name`이 실제 R2 이름과 같은지 확인 |
+| 사진 업로드 실패 | `wrangler.jsonc`의 PHOTOS `bucket_name`이 실제 R2 이름과 같은지 확인 |
+| 백업 실패 | `wrangler.jsonc`의 BACKUPS `bucket_name`이 실제 R2 이름과 같은지 확인 |
 | 주소가 이상함 | `wrangler.jsonc`의 `name`이 주소 앞부분이 됨 → 바꾸고 재배포 |
 | `git push`가 인증 요구 | GitHub 토큰 또는 SSH 키 설정 필요 (검색: "GitHub SSH 키 등록") |
 
