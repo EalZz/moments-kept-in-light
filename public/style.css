@@ -1753,6 +1753,7 @@ main.wrap { padding-top: 76px; }
 
 /* ---------- contact / about teaser ---------- */
 .about-teaser {
+  padding-top: 104px;
   padding-bottom: 110px;
   max-width: 560px;
   margin: 0 auto;
@@ -1761,6 +1762,9 @@ main.wrap { padding-top: 76px; }
 .about-teaser .about-p { margin-bottom: 22px; }
 .about-teaser .sec-kicker { justify-content: center; }
 .about-teaser .contact-links { justify-content: center; }
+@media (max-width: 640px) {
+  .about-teaser { padding-top: 72px; }
+}
 .contact { padding-bottom: 110px; }
 .contact-copy { font-size: 14px; color: var(--fg-dim); margin-bottom: 24px; }
 .contact-links { display: flex; flex-wrap: wrap; gap: 14px; }
