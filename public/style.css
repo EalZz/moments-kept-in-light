@@ -1115,29 +1115,37 @@ main.wrap { padding-top: 76px; }
 /* 홈 컬렉션 분류 — 행사와 개인 세션을 같은 목록 안에서 섞지 않음 */
 .collection-index .col-head { padding-bottom: 42px; }
 .collection-block + .collection-block { margin-top: 12px; }
-.collection-block { --collection-fold-y: 1120px; }
+.collection-block { --collection-fold-y: 1700px; }
 .collection-block-head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
   padding: 18px 0 24px;
   border-top: 1px solid var(--border);
 }
 .collection-block-title {
   display: flex;
   align-items: baseline;
-  gap: 16px;
+  gap: 12px;
   min-width: 0;
 }
 .collection-block-head h3 {
-  font-family: var(--font-display);
-  font-size: 27px;
-  font-weight: 500;
-  letter-spacing: 0.06em;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.2;
+  color: var(--fg-faint);
+  letter-spacing: 0.24em;
   text-transform: uppercase;
 }
-.collection-block-head .date { margin-top: 0; }
+.collection-block-head .date {
+  margin-top: 0;
+  font-size: 11px;
+  color: var(--fg-faint);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
 .collection-list-shell {
   position: relative;
 }
@@ -1278,7 +1286,7 @@ main.wrap { padding-top: 76px; }
     padding: 14px 0 18px;
   }
   .collection-block-title { display: block; }
-  .collection-block-head h3 { font-size: 22px; }
+  .collection-block-head h3 { font-size: 12px; }
   .collection-block-title .date { margin-top: 5px; }
   .collection-toggle { bottom: 22px; width: 64px; height: 64px; font-size: 9px; }
   .collection-block--session .collections .mcol { gap: 36px; }
