@@ -11,10 +11,12 @@ async function login(password = 'test-password') {
   return { response, cookie: response.headers.get('set-cookie')?.split(';')[0] }
 }
 
-async function seedCollection({ title, published = 1, deletedAt = null } = {}) {
+async function seedCollection({ title, published = 1, deletedAt = null, shootType = 'event', locationType = '', relatedEventId = null } = {}) {
   const result = await env.DB.prepare(
-    'INSERT INTO collections (title, description, published, deleted_at) VALUES (?, ?, ?, ?)'
-  ).bind(title || 'Collection', 'Description', published, deletedAt).run()
+    `INSERT INTO collections
+       (title, description, published, deleted_at, shoot_type, location_type, related_event_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).bind(title || 'Collection', 'Description', published, deletedAt, shootType, locationType, relatedEventId).run()
   return result.meta.last_row_id
 }
 
@@ -161,6 +163,123 @@ describe('collection editing', () => {
     expect(response.status).toBe(200)
     const row = await env.DB.prepare('SELECT title, date, description FROM collections WHERE id = ?').bind(id).first()
     expect(row).toEqual({ title: 'After', date: '2026-07', description: 'Updated' })
+  })
+})
+
+describe('collection types and home settings', () => {
+  it('creates a personal session and exposes its related event', async () => {
+    const eventId = await seedCollection({ title: 'Related event' })
+    const { cookie } = await login()
+    const created = await SELF.fetch('https://example.com/api/collections', {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: 'Personal session',
+        shoot_type: 'session',
+        location_type: 'outdoor',
+        related_event_id: eventId,
+        session_model: {
+          name: '메쨩님',
+          twitter: '@reze_model',
+          character: '체인소 맨 - 레제',
+          series: '체인소 맨',
+        },
+      }),
+    })
+    expect(created.status).toBe(200)
+    const id = (await created.json()).id
+    const detail = await (await SELF.fetch(`https://example.com/api/collections/${id}`, { headers: { Cookie: cookie } })).json()
+    expect(detail.shoot_type).toBe('session')
+    expect(detail.location_type).toBe('outdoor')
+    expect(detail.related_event_id).toBe(eventId)
+    expect(detail.related_event_title).toBe('Related event')
+    expect(detail.groups).toEqual([])
+    expect(detail.session_model).toEqual({
+      name: '메쨩님',
+      twitter: ['reze_model'],
+      character: '체인소 맨 - 레제',
+      series: ['체인소 맨'],
+    })
+
+    const list = await (await SELF.fetch('https://example.com/api/collections', { headers: { Cookie: cookie } })).json()
+    expect(list.find((collection) => collection.id === id).session_model).toEqual(detail.session_model)
+
+    const updated = await SELF.fetch(`https://example.com/api/collections/${id}`, {
+      method: 'PATCH',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_model: { name: '하정님', twitter: 'hajung_model' } }),
+    })
+    expect(updated.status).toBe(200)
+    const updatedDetail = await (await SELF.fetch(`https://example.com/api/collections/${id}`, { headers: { Cookie: cookie } })).json()
+    expect(updatedDetail.session_model).toEqual({
+      name: '하정님',
+      twitter: ['hajung_model'],
+      character: '',
+      series: [],
+    })
+  })
+
+  it('rejects invalid collection type metadata and defaults old rows to events', async () => {
+    const id = await seedCollection({ title: 'Legacy row' })
+    const row = await env.DB.prepare('SELECT shoot_type, location_type FROM collections WHERE id = ?').bind(id).first()
+    expect(row).toEqual({ shoot_type: 'event', location_type: '' })
+    const { cookie } = await login()
+    const response = await SELF.fetch(`https://example.com/api/collections/${id}`, {
+      method: 'PATCH',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ shoot_type: 'portrait' }),
+    })
+    expect(response.status).toBe(400)
+  })
+
+  it('stores and validates the home section order', async () => {
+    expect(await (await SELF.fetch('https://example.com/api/settings')).json()).toMatchObject({
+      home_section_order: 'events_first',
+    })
+    expect((await SELF.fetch('https://example.com/api/settings', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ home_section_order: 'sessions_first' }),
+    })).status).toBe(401)
+    const { cookie } = await login()
+    expect((await SELF.fetch('https://example.com/api/settings', {
+      method: 'PATCH',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ home_section_order: 'invalid' }),
+    })).status).toBe(400)
+    expect((await SELF.fetch('https://example.com/api/settings', {
+      method: 'PATCH',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ home_section_order: 'sessions_first' }),
+    })).status).toBe(200)
+    expect(await (await SELF.fetch('https://example.com/api/settings')).json()).toMatchObject({
+      home_section_order: 'sessions_first',
+    })
+  })
+})
+
+describe('group creation', () => {
+  it('puts a newly created person folder before the existing folder order', async () => {
+    const collectionId = await seedCollection({ title: 'Group order' })
+    await env.DB.prepare('INSERT INTO groups (collection_id, name, sort_order) VALUES (?, ?, ?)')
+      .bind(collectionId, 'Existing first', 10).run()
+    await env.DB.prepare('INSERT INTO groups (collection_id, name, sort_order) VALUES (?, ?, ?)')
+      .bind(collectionId, 'Existing second', 11).run()
+    const { cookie } = await login()
+
+    const created = await SELF.fetch(`https://example.com/api/collections/${collectionId}/groups`, {
+      method: 'POST',
+      headers: { cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'New person' }),
+    })
+    expect(created.status).toBe(200)
+
+    const collection = await (await SELF.fetch(`https://example.com/api/collections/${collectionId}`, {
+      headers: { cookie },
+    })).json()
+    expect(collection.groups.map((group) => group.name)).toEqual([
+      'New person', 'Existing first', 'Existing second',
+    ])
   })
 })
 

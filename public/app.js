@@ -565,13 +565,74 @@ async function startFeatureRotation(colId, coverKey) {
 }
 
 // 컬렉션 카드 HTML
+function shootTypeOf(c) {
+  return c?.shoot_type === 'session' ? 'session' : 'event'
+}
+function shootTypeLabel(c) {
+  return shootTypeOf(c) === 'session' ? 'Personal Session' : 'Event'
+}
+function locationLabel(value) {
+  return ({ venue: 'Event venue', outdoor: 'Outdoor', studio: 'Studio' }[value] || '')
+}
+function sessionList(value, separator = /[,\s]+/) {
+  const values = Array.isArray(value) ? value : String(value || '').split(separator)
+  return values.map((item) => String(item || '').trim()).filter(Boolean)
+}
+function sessionModelValue(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const model = {
+    name: String(value.name || '').trim(),
+    handles: sessionList(value.twitter).map((handle) => handle.replace(/^@/, '')),
+    character: String(value.character || '').trim(),
+    series: sessionList(value.series, /[,\n]+/),
+  }
+  return model.name || model.handles.length || model.character || model.series.length ? model : null
+}
+function sessionTitleFallback(title) {
+  const parts = String(title || '').split(/\s+[-–—]\s+/)
+  if (parts.length < 2) return { name: String(title || '').trim(), handles: [], character: '', series: [] }
+  return {
+    name: parts.shift().trim(),
+    handles: [],
+    character: parts.join(' - ').trim(),
+    series: [],
+  }
+}
+function sessionIdentityOf(title, sections = [], collectionModel = null) {
+  const direct = sessionModelValue(collectionModel)
+  if (direct) return direct
+  const legacy = sections.find((section) => section.name || section.character || section.handles?.length)
+  if (legacy) {
+    return {
+      name: sessionList(legacy.modelNames).join(' & ') || String(legacy.name || '').trim(),
+      handles: sessionList(legacy.handles),
+      character: String(legacy.character || '').trim(),
+      series: sessionList(legacy.series, /[,\n]+/),
+    }
+  }
+  return sessionTitleFallback(title)
+}
+function sessionSubtitle(identity) {
+  return [sessionList(identity?.series, /[,\n]+/).join(', '), identity?.character || ''].filter(Boolean).join(' · ')
+}
+function sessionAccountsHtml(identity) {
+  return sessionList(identity?.handles).map((handle) =>
+    `<a href="https://x.com/${esc(handle)}" target="_blank" rel="noopener">@${esc(handle)} ↗</a>`).join(', ')
+}
 function cardHtml(c) {
+  const type = shootTypeOf(c)
+  const identity = type === 'session' ? sessionIdentityOf(c.title, [], c.session_model) : null
+  const cardTitle = identity?.name || c.title
+  const cardSubtitle = identity ? sessionSubtitle(identity) : ''
+  const info = type === 'session'
+    ? [locationLabel(c.location_type), `${c.photo_count} photos`].filter(Boolean).join(' · ')
+    : [c.date, `${c.photo_count} photos`].filter(Boolean).join(' · ')
   return `
-    <a class="card" href="#/c/${c.id}">
+    <a class="card card--${type}" href="#/c/${c.id}">
       <div class="cover" ${c.cover_w && c.cover_h ? `style="aspect-ratio:${c.cover_w}/${c.cover_h}"` : ''}>
-        <img src="/img/${esc(c.cover_medium || c.cover_large || c.cover_thumb)}" alt="${esc(c.title)}" loading="lazy" data-fade />
+        <img src="/img/${esc(c.cover_medium || c.cover_large || c.cover_thumb)}" alt="${esc(cardTitle)}" loading="lazy" data-fade />
       </div>
-      ${(c.preview_thumbs || []).length ? `<div class="strip">
+      ${type === 'event' && (c.preview_thumbs || []).length ? `<div class="strip">
         ${c.preview_thumbs.map((k, i) => {
           const extra = c.photo_count - 1 - c.preview_thumbs.length
           const isLast = i === c.preview_thumbs.length - 1
@@ -579,40 +640,111 @@ function cardHtml(c) {
         }).join('')}
       </div>` : ''}
       <div class="meta">
-        <div class="info">${esc(c.date)}${c.date ? ' · ' : ''}${c.photo_count} photos</div>
-        <div class="title">${esc(c.title)}</div>
+        <div class="info">${esc(shootTypeLabel(c))}${info ? ` · ${esc(info)}` : ''}</div>
+        <div class="title">${esc(cardTitle)}</div>
+        ${cardSubtitle ? `<div class="session-subtitle">${esc(cardSubtitle)}</div>` : ''}
       </div>
     </a>`
 }
 
 // 카드 masonry 배치: 읽는 순서(왼→오)를 지키며 가장 짧은 열에 순서대로 넣기
-let homeCollections = null
-function layoutCollections(force) {
-  const wrap = document.querySelector('.collections')
-  if (!wrap || !homeCollections) return
-  const n = innerWidth <= 980 ? 2 : 3
-  if (!force && +wrap.dataset.cols === n) return
-  wrap.dataset.cols = n
-  const heights = Array(n).fill(0)
-  const colEls = Array.from({ length: n }, () => {
-    const d = document.createElement('div')
-    d.className = 'mcol'
-    return d
-  })
-  for (const c of homeCollections) {
-    const i = heights.indexOf(Math.min(...heights))
-    colEls[i].insertAdjacentHTML('beforeend', cardHtml(c))
-    // 카드 높이 추정 (열 폭 기준 비율): 커버 + 썸네일 스트립 + 텍스트
-    const coverH = c.cover_w && c.cover_h ? c.cover_h / c.cover_w : 0.75
-    heights[i] += coverH + ((c.preview_thumbs || []).length ? 0.36 : 0) + 0.28
+let homeCollections = { event: [], session: [] }
+function syncCollectionToggle(wrap) {
+  const button = document.querySelector('.collection-toggle[aria-controls="' + wrap.id + '"]')
+  if (!button) return
+  const shell = wrap.closest('.collection-list-shell')
+  const expanded = wrap.dataset.expanded === 'true'
+  shell?.classList.toggle('is-expanded', expanded)
+  const foldHeight = parseFloat(getComputedStyle(wrap).getPropertyValue('--collection-fold-y'))
+  // 애니메이션 중에도 실제 전체 높이와 접힘 기준을 비교해 버튼 상태를 안정적으로 계산합니다.
+  const hasOverflow = Number.isFinite(foldHeight)
+    ? wrap.scrollHeight > Math.ceil(foldHeight) + 8
+    : wrap.scrollHeight > Math.ceil(wrap.clientHeight) + 8
+  wrap.classList.toggle('is-overflowing', hasOverflow)
+  wrap.dataset.hasOverflow = String(hasOverflow)
+  button.hidden = !hasOverflow
+}
+function animateCollectionToggle(wrap, button, expanded) {
+  wrap._collectionAnimationCleanup?.()
+
+  const currentHeight = wrap.getBoundingClientRect().height
+  const computed = getComputedStyle(wrap)
+  const foldHeight = parseFloat(computed.getPropertyValue('--collection-fold-y')) || currentHeight
+  const targetHeight = expanded ? wrap.scrollHeight : Math.min(foldHeight, wrap.scrollHeight)
+  const shell = wrap.closest('.collection-list-shell')
+
+  wrap.dataset.expanded = String(expanded)
+  wrap.classList.add('is-animating')
+  wrap.style.maxHeight = `${currentHeight}px`
+  wrap.classList.toggle('is-collapsed', !expanded)
+  shell?.classList.toggle('is-expanded', expanded)
+  button.setAttribute('aria-expanded', String(expanded))
+  button.setAttribute('aria-label', expanded ? '컬렉션 접기' : '컬렉션 더보기')
+  button.title = expanded ? '접기' : '더보기'
+  button.classList.toggle('is-expanded', expanded)
+  const arrow = button.querySelector('.collection-toggle-arrow')
+  if (arrow) arrow.textContent = expanded ? '↑' : '↓'
+  button.hidden = false
+
+  let finished = false
+  const cleanup = () => {
+    if (finished) return
+    finished = true
+    wrap.removeEventListener('transitionend', onEnd)
+    wrap._collectionAnimationCleanup = null
+    wrap.style.removeProperty('max-height')
+    wrap.classList.remove('is-animating')
+    syncCollectionToggle(wrap)
   }
-  wrap.replaceChildren(...colEls)
+  const onEnd = (event) => {
+    if (event.target === wrap && event.propertyName === 'max-height') cleanup()
+  }
+  wrap._collectionAnimationCleanup = cleanup
+  wrap.addEventListener('transitionend', onEnd)
+  requestAnimationFrame(() => {
+    if (!finished) wrap.style.maxHeight = `${targetHeight}px`
+  })
+}
+function layoutCollections(force) {
+  document.querySelectorAll('.collections[data-kind]').forEach((wrap) => {
+    wrap._collectionAnimationCleanup?.()
+    const kind = wrap.dataset.kind === 'session' ? 'session' : 'event'
+    const allItems = homeCollections[kind] || []
+    const expanded = wrap.dataset.expanded === 'true'
+    const items = allItems
+    wrap.classList.toggle('is-collapsed', !expanded)
+    const n = kind === 'session'
+      ? (innerWidth <= 620 ? 1 : 2)
+      : (innerWidth <= 980 ? 2 : 3)
+    if (!force && +wrap.dataset.cols === n) return
+    wrap.dataset.cols = n
+    const heights = Array(n).fill(0)
+    const colEls = Array.from({ length: n }, () => {
+      const d = document.createElement('div')
+      d.className = 'mcol'
+      return d
+    })
+    for (const c of items) {
+      const i = heights.indexOf(Math.min(...heights))
+      colEls[i].insertAdjacentHTML('beforeend', cardHtml(c))
+      // 카드 높이 추정 (열 폭 기준 비율): 커버 + 행사 썸네일 스트립 + 텍스트
+      const coverH = c.cover_w && c.cover_h ? c.cover_h / c.cover_w : 0.75
+      heights[i] += coverH + (kind === 'event' && (c.preview_thumbs || []).length ? 0.36 : 0) + 0.28
+    }
+    wrap.replaceChildren(...colEls)
+    syncCollectionToggle(wrap)
+  })
+  markLoadedImages()
 }
 window.addEventListener('resize', () => layoutCollections(false))
 
 async function renderHome() {
   const [cols, settings] = await Promise.all([api('/collections'), api('/settings')])
   const visible = cols.filter((c) => c.photo_count > 0)
+  const collectionsByType = {
+    event: visible.filter((c) => shootTypeOf(c) === 'event'),
+    session: visible.filter((c) => shootTypeOf(c) === 'session'),
+  }
   // 관리자가 지정한 컬렉션이 있으면 그 컬렉션 고정, 없으면 전체 사진 랜덤 순환
   const featured = visible.find((c) => c.id === settings.featured_collection_id)
   let deck = null
@@ -665,13 +797,37 @@ async function renderHome() {
     </a>`
   }
 
+  const sectionOrder = settings.home_section_order === 'sessions_first'
+    ? ['session', 'event']
+    : ['event', 'session']
+  const sectionTitles = { event: 'Events', session: 'Personal Sessions' }
+  const collectionSections = sectionOrder.map((kind) => {
+    const items = collectionsByType[kind]
+    if (!items.length) return ''
+    const listId = 'collections-' + kind
+    return `
+      <section class="collection-block collection-block--${kind}">
+        <div class="collection-block-head">
+          <div class="collection-block-title">
+            <h3>${sectionTitles[kind]}</h3>
+            <div class="date">${items.length} collections</div>
+          </div>
+        </div>
+        <div class="collection-list-shell">
+          <div id="${listId}" class="collections is-collapsed" data-kind="${kind}" data-expanded="false"></div>
+          ${'<button type="button" class="collection-toggle" aria-label="컬렉션 더보기" title="더보기" aria-controls="' + listId + '" aria-expanded="false" hidden>' +
+            '<span class="collection-toggle-arrow" aria-hidden="true">↓</span>' +
+          '</button>'}
+        </div>
+      </section>`
+  }).join('')
   const grid = visible.length ? `
-    <section id="collections">
+    <section id="collections" class="collection-index">
       <div class="col-head">
         <h2>Collections</h2>
         <div class="date">${visible.length} collections · <a href="#/photos">All photos →</a></div>
       </div>
-      <div class="collections"></div>
+      ${collectionSections}
     </section>` : '<div class="empty">아직 게시된 사진이 없습니다</div>'
 
   // 하단 About 티저: 짧은 소개 + 연락 버튼 + 더 보기
@@ -689,8 +845,16 @@ async function renderHome() {
     </section>`
 
   main.innerHTML = hero + '<div class="below-hero">' + cover + grid + teaser + '</div>'
-  homeCollections = visible
+  homeCollections = collectionsByType
   layoutCollections(true)
+  main.querySelectorAll('.collection-toggle').forEach((button) => {
+    button.addEventListener('click', () => {
+      const wrap = document.getElementById(button.getAttribute('aria-controls'))
+      if (!wrap) return
+      const expanded = wrap.dataset.expanded !== 'true'
+      animateCollectionToggle(wrap, button, expanded)
+    })
+  })
   if (featured && featured.cover_large) startFeatureRotation(featured.id, featured.cover_medium || featured.cover_large)
   else if (deck) startRandomFeature(deck)
 }
@@ -770,6 +934,22 @@ window.addEventListener('resize', () => {
   jResizeFrame = requestAnimationFrame(layoutJustifiedAll)
 })
 
+function sessionPhotoHtml(p, i, extraClass = '') {
+  return `<button type="button" class="ph ${extraClass}" data-i="${i}" aria-label="${esc(photoAltText(p) || '사진')} 크게 보기" style="aspect-ratio:${p.width || 3}/${p.height || 4}">
+    <img src="/img/${esc(p.key_medium || p.key_large || p.key_thumb)}" alt="${esc(photoAltText(p))}" loading="lazy" data-fade />
+  </button>`
+}
+
+function sessionGalleryHtml(photos) {
+  if (!photos.length) return ''
+  const [lead, ...rest] = photos
+  const gridClass = rest.length === 1 ? ' is-single' : rest.length % 2 ? ' is-odd' : ''
+  return `<div class="session-gallery">
+    <div class="session-lead">${sessionPhotoHtml(lead, 0)}</div>
+    ${rest.length ? `<div class="session-grid${gridClass}">${rest.map((p, i) => sessionPhotoHtml(p, i + 1)).join('')}</div>` : ''}
+  </div>`
+}
+
 async function renderCollection(id, focusGroup = null) {
   const col = await api('/collections/' + id)
   const ungrouped = col.photos.filter((p) => !p.group_id)
@@ -788,10 +968,66 @@ async function renderCollection(id, focusGroup = null) {
       if (s.character) p._character = s.character
     })
   }
+  const sessionModel = col.session_model || null
+  if (shootTypeOf(col) === 'session' && sessionModel) {
+    const handles = [].concat(sessionModel.twitter || []).filter(Boolean)
+    for (const p of ungrouped) {
+      if (handles.length) p._models = handles
+      if (sessionModel.name) p._modelNames = [sessionModel.name]
+      if (sessionModel.character) p._character = sessionModel.character
+    }
+  }
   // 라이트박스용 사진 목록: 표시 순서 그대로 하나로 이어붙임 (폴더가 달라져도 계속 넘어감)
   const flat = [...ungrouped, ...sections.flatMap((s) => s.photos)]
   // 행사명은 alt 텍스트와 라이트박스 설명에 쓰입니다(Photos 페이지와 같은 형태로 맞춤).
   for (const p of flat) p._event = col.title
+
+  if (shootTypeOf(col) === 'session') {
+    jSets = null
+    const facts = [col.date, locationLabel(col.location_type), `${flat.length} photos`].filter(Boolean).join(' · ')
+    const identity = sessionIdentityOf(col.title, sections, sessionModel)
+    const title = identity.name || col.title
+    const subtitle = sessionSubtitle(identity)
+    const accounts = sessionAccountsHtml(identity)
+    const related = col.related_event_id && col.related_event_title
+      ? `<a class="related-event" href="#/c/${col.related_event_id}">From Events · ${esc(col.related_event_title)}${col.related_event_date ? ` · ${esc(col.related_event_date)}` : ''} →</a>`
+      : ''
+    main.innerHTML = `
+      <div class="col-head session-head">
+        <a class="back" href="#/">← Personal Sessions</a>
+        <div class="shoot-kind">Personal Session</div>
+        <h2>${esc(title)}</h2>
+        ${subtitle ? `<div class="session-identity-subtitle">${esc(subtitle)}</div>` : ''}
+        ${accounts ? `<div class="session-identity-accounts">${accounts}</div>` : ''}
+        ${facts ? `<div class="date">${esc(facts)}</div>` : ''}
+        ${col.description ? `<div class="desc">${esc(col.description)}</div>` : ''}
+        ${related}
+      </div>
+      ${flat.length ? sessionGalleryHtml(flat) : '<div class="empty">사진이 없습니다</div>'}
+      ${flat.length ? `<div class="col-share">
+        <button type="button" class="share-collection" aria-label="세션 공유 링크 복사">이 세션 공유 ↗</button>
+      </div>` : ''}`
+    main.querySelector('.share-collection')?.addEventListener('click', async (ev) => {
+      const shareUrl = `${location.origin}/share/collection/${encodeURIComponent(id)}`
+      try {
+        if (!navigator.clipboard) throw new Error('Clipboard API unavailable')
+        await navigator.clipboard.writeText(shareUrl)
+        const button = ev.currentTarget
+        button.textContent = '링크 복사됨'
+        setTimeout(() => { button.textContent = '이 세션 공유 ↗' }, 1600)
+      } catch {
+        window.prompt('공유 링크를 복사하세요:', shareUrl)
+      }
+    })
+    main.onclick = (ev) => {
+      const el = ev.target.closest('.ph')
+      if (!el) return
+      current = { photos: flat, index: 0 }
+      openLightbox(+el.dataset.i)
+    }
+    return
+  }
+
   // 섹션별 justified 그리드 데이터 (.jgrid 순서와 1:1)
   jSets = []
   let offset = 0

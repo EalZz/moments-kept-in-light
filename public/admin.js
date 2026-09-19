@@ -11,6 +11,36 @@ window.addEventListener('beforeunload', (e) => {
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (ch) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]))
 
+function collectionKindLabel(col) {
+  return col?.shoot_type === 'session' ? '개인 세션' : '행사'
+}
+function collectionLocationLabel(value) {
+  return ({ venue: '행사장', outdoor: '야외', studio: '스튜디오' }[value] || '')
+}
+
+function parseJsonObject(value) {
+  try {
+    const parsed = JSON.parse(value || '{}')
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function collectionSessionModel(col) {
+  const raw = col?.session_model || parseJsonObject(col?.meta_json).session_model
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { name: '', twitter: [], character: '', series: [] }
+  const list = (value, separator = /[,\s]+/) =>
+    (Array.isArray(value) ? value : String(value || '').split(separator))
+      .map((item) => String(item || '').trim()).filter(Boolean)
+  return {
+    name: String(raw.name || '').trim(),
+    twitter: list(raw.twitter).map((handle) => handle.replace(/^@/, '')).filter(Boolean),
+    character: String(raw.character || '').trim(),
+    series: list(raw.series, /[,\n]+/),
+  }
+}
+
 async function api(path, opts = {}) {
   if (opts.json) {
     opts.body = JSON.stringify(opts.json)
@@ -168,12 +198,48 @@ async function boot() {
 async function renderCollections() {
   selectedPhotos.clear() // 목록으로 나가면 사진 선택은 유지하지 않습니다.
   selectionCollectionId = null
-  const [allCols, stats] = await Promise.all([api('/collections'), api('/stats')])
+  const [allCols, stats, homeSettings] = await Promise.all([
+    api('/collections'), api('/stats'), api('/settings'),
+  ])
   const cols = allCols.filter((c) => !c.deleted_at)
+  const eventCols = cols.filter((c) => c.shoot_type !== 'session')
+  const sessionCols = cols.filter((c) => c.shoot_type === 'session')
+  const selectedHomeOrder = homeSettings.home_section_order === 'sessions_first'
+    ? 'sessions_first'
+    : 'events_first'
+  const relatedEventOptions = eventCols.map((c) =>
+    `<option value="${c.id}">${esc(c.title)}${c.date ? ` · ${esc(c.date)}` : ''}</option>`).join('')
   const daily = stats.daily || []
   const maxViews = Math.max(1, ...daily.map((d) => d.views))
   const firstDate = daily[0]?.view_date?.slice(5).replace('-', '.') || ''
   const lastDate = daily.at(-1)?.view_date?.slice(5).replace('-', '.') || ''
+  const collectionListPanel = (kind, list) => {
+    const label = kind === 'session' ? '개인 세션' : '행사'
+    return `
+      <div class="panel collection-type-panel">
+        <h3>${label} <span class="muted">${list.length}개</span></h3>
+        <div class="collection-type-list" data-kind="${kind}">
+          ${list.map((c) => {
+            const model = kind === 'session' ? collectionSessionModel(c) : null
+            const modelInfo = model?.name || model?.twitter?.length
+              ? ` · ${esc(model.name || model.twitter.map((handle) => '@' + handle).join(', '))}`
+              : ''
+            return `
+              <div class="col-item" data-id="${c.id}">
+                ${c.cover_thumb ? `<img src="/img/${esc(c.cover_thumb)}" />` : '<div class="ph-placeholder"></div>'}
+                <div class="t">
+                  <div class="title">${esc(c.title)}</div>
+                  <div class="info">${collectionKindLabel(c)}${c.date ? ` · ${esc(c.date)}` : ''}${c.location_type ? ` · ${collectionLocationLabel(c)}` : ''}${modelInfo} · ${c.photo_count}장 · ${c.published === 0 ? '비공개' : '공개'}</div>
+                </div>
+                <div class="ord-btns">
+                  <button class="colUp" title="위로">▲</button>
+                  <button class="colDown" title="아래로">▼</button>
+                </div>
+              </div>`
+          }).join('') || '<p class="muted">아직 등록된 컬렉션이 없습니다.</p>'}
+        </div>
+      </div>`
+  }
   app.innerHTML = `
     <div class="topbar">
       <h2>컬렉션 관리</h2>
@@ -217,28 +283,75 @@ async function renderCollections() {
         <input id="newTitle" placeholder="제목 (예: 벚꽃 출사)" />
         <input id="newDate" placeholder="날짜 (예: 2026-05)" style="max-width:160px" />
       </div>
+      <div class="row">
+        <select id="newShootType" aria-label="촬영 유형">
+          <option value="event">행사</option>
+          <option value="session">개인 세션</option>
+        </select>
+        <select id="newLocationType" aria-label="촬영 장소">
+          <option value="">장소 유형 없음</option>
+          <option value="venue">행사장</option>
+          <option value="outdoor">야외</option>
+          <option value="studio">스튜디오</option>
+        </select>
+      </div>
+      <div id="newSessionModelFields" class="session-model-fields" hidden>
+        <div class="row">
+          <input id="newSessionModelName" placeholder="모델명 (예: 메쨩님)" />
+          <input id="newSessionModelHandles" placeholder="모델 X 계정 (예: aaa, bbb)" />
+        </div>
+        <div class="row">
+          <input id="newSessionModelCharacter" placeholder="캐릭터명 (선택)" />
+          <input id="newSessionModelSeries" placeholder="작품·장르 (선택)" />
+        </div>
+        <div class="field-hint">개인 세션은 이 컬렉션 자체가 모델 세션입니다. 사진은 별도 사람 폴더 없이 개인 세션 사진에 바로 올립니다.</div>
+      </div>
+      <div class="row">
+        <select id="newRelatedEvent" aria-label="관련 행사" disabled>
+          <option value="">관련 행사 없음</option>
+          ${relatedEventOptions}
+        </select>
+        <span class="field-hint">개인 세션이 행사 중 촬영이면 연결할 수 있습니다.</span>
+      </div>
       <div class="row"><input id="newDesc" placeholder="설명 (선택)" /></div>
       <button class="primary" id="createBtn">만들기</button>
     </div>
-    <div class="panel">
-      <h3>컬렉션 ${cols.length}개</h3>
-      <div id="colList">
-        ${cols.map((c) => `
-          <div class="col-item" data-id="${c.id}">
-            ${c.cover_thumb ? `<img src="/img/${esc(c.cover_thumb)}" />` : '<div class="ph-placeholder"></div>'}
-            <div class="t">
-              <div class="title">${esc(c.title)}</div>
-              <div class="info">${esc(c.date)}${c.date ? ' · ' : ''}${c.photo_count}장 · ${c.published === 0 ? '비공개' : '공개'}</div>
-            </div>
-            <div class="ord-btns">
-              <button class="colUp" title="위로">▲</button>
-              <button class="colDown" title="아래로">▼</button>
-            </div>
-          </div>`).join('') || '<p class="muted">아직 컬렉션이 없습니다. 위에서 만들어보세요.</p>'}
+    <div class="panel home-order-panel">
+      <div class="sec-head">
+        <div>
+          <h3>홈 섹션 순서</h3>
+          <div class="muted">방문자 홈에서 Events와 Personal Sessions가 표시되는 순서</div>
+        </div>
+        <div class="home-order-control">
+          <select id="homeSectionOrder" aria-label="홈 섹션 순서">
+            <option value="events_first" ${selectedHomeOrder === 'events_first' ? 'selected' : ''}>Events 먼저</option>
+            <option value="sessions_first" ${selectedHomeOrder === 'sessions_first' ? 'selected' : ''}>Personal Sessions 먼저</option>
+          </select>
+          <button class="primary" id="homeSectionOrderSave">저장</button>
+          <span class="home-order-status" id="homeOrderStatus" role="status"></span>
+        </div>
       </div>
-    </div>`
+    </div>
+    ${collectionListPanel('event', eventCols)}
+    ${collectionListPanel('session', sessionCols)}`
 
   setupAdminMenu()
+  const homeOrderSelect = document.getElementById('homeSectionOrder')
+  const homeOrderSave = document.getElementById('homeSectionOrderSave')
+  const homeOrderStatus = document.getElementById('homeOrderStatus')
+  homeOrderSave.addEventListener('click', async () => {
+    homeOrderSave.disabled = true
+    homeOrderStatus.textContent = '저장 중…'
+    try {
+      await api('/settings', { method: 'PATCH', json: { home_section_order: homeOrderSelect.value } })
+      homeOrderStatus.textContent = '저장됨'
+    } catch (error) {
+      homeOrderStatus.textContent = ''
+      alert('홈 섹션 순서 저장 실패: ' + error.message)
+    } finally {
+      homeOrderSave.disabled = false
+    }
+  })
   document.getElementById('backupBtn').addEventListener('click', async () => {
     try { await downloadBackup() } catch (e) { alert('백업 다운로드 실패: ' + e.message) }
   })
@@ -313,12 +426,22 @@ async function renderCollections() {
   document.getElementById('createBtn').addEventListener('click', async () => {
     const title = document.getElementById('newTitle').value.trim()
     if (!title) return alert('제목을 입력하세요')
+    const shootType = document.getElementById('newShootType').value
     const { id } = await api('/collections', {
       method: 'POST',
       json: {
         title,
         date: document.getElementById('newDate').value.trim(),
         description: document.getElementById('newDesc').value.trim(),
+        shoot_type: shootType,
+        location_type: document.getElementById('newLocationType').value,
+        related_event_id: shootType === 'session' ? (document.getElementById('newRelatedEvent').value || null) : null,
+        session_model: shootType === 'session' ? {
+          name: document.getElementById('newSessionModelName').value.trim(),
+          twitter: document.getElementById('newSessionModelHandles').value.trim(),
+          character: document.getElementById('newSessionModelCharacter').value.trim(),
+          series: document.getElementById('newSessionModelSeries').value.trim(),
+        } : null,
       },
     })
     goCollection(id)
@@ -327,12 +450,24 @@ async function renderCollections() {
     el.addEventListener('click', () => goCollection(el.dataset.id)))
 
   // 컬렉션 순서 이동 (▲▼) — 클릭이 컬렉션 열기로 번지지 않게 차단
+  const orderedByKind = {
+    event: eventCols.slice(),
+    session: sessionCols.slice(),
+  }
   const moveCollection = async (cid, dir) => {
-    const ids = cols.map((c) => c.id)
-    const i = ids.indexOf(cid)
+    const current = cols.find((c) => String(c.id) === String(cid))
+    if (!current) return
+    const kind = current.shoot_type === 'session' ? 'session' : 'event'
+    const ordered = orderedByKind[kind]
+    const i = ordered.findIndex((c) => String(c.id) === String(cid))
     const j = i + dir
-    if (i < 0 || j < 0 || j >= ids.length) return
-    ;[ids[i], ids[j]] = [ids[j], ids[i]]
+    if (i < 0 || j < 0 || j >= ordered.length) return
+    ;[ordered[i], ordered[j]] = [ordered[j], ordered[i]]
+    const offsets = { event: 0, session: 0 }
+    const ids = cols.map((c) => {
+      const currentKind = c.shoot_type === 'session' ? 'session' : 'event'
+      return orderedByKind[currentKind][offsets[currentKind]++].id
+    })
     await api('/collection-order', { method: 'PUT', json: { ids } })
     renderCollections()
   }
@@ -346,6 +481,18 @@ async function renderCollections() {
       e.stopPropagation()
       moveCollection(+e.target.closest('.col-item').dataset.id, 1)
     }))
+
+  const newType = document.getElementById('newShootType')
+  const relatedEvent = document.getElementById('newRelatedEvent')
+  const newSessionModelFields = document.getElementById('newSessionModelFields')
+  const syncNewRelation = () => {
+    const enabled = newType.value === 'session'
+    relatedEvent.disabled = !enabled
+    if (!enabled) relatedEvent.value = ''
+    newSessionModelFields.hidden = !enabled
+  }
+  newType.addEventListener('change', syncNewRelation)
+  syncNewRelation()
 }
 
 // ---------- trash ----------
@@ -403,11 +550,16 @@ async function openTrash() {
 // 섹션 = 컬렉션 바로 아래(groupId null) + 사람별 폴더들. 섹션마다 드롭존/트윗 가져오기/그리드.
 function sectionHtml(col, group, photos) {
   const gid = group ? group.id : ''
+  const rootModel = !group && col.shoot_type === 'session' ? collectionSessionModel(col) : null
+  const rootLabel = group ? '📁 ' + esc(group.name) : col.shoot_type === 'session' ? '개인 세션 사진' : '행사 바로 아래'
+  const rootModelInfo = rootModel && (rootModel.name || rootModel.twitter.length || rootModel.character)
+    ? ` · ${esc([rootModel.name, ...rootModel.twitter.map((handle) => '@' + handle), rootModel.character].filter(Boolean).join(' · '))}`
+    : ''
   return `
     <div class="panel section" data-gid="${gid}">
       <div class="sec-head">
-        <h3>${group ? '📁 ' + esc(group.name) : '행사 바로 아래'}
-          <span class="muted"><span class="sec-count">${photos.length}장</span>${group && group.meta && group.meta.twitter ? ' · ' + [].concat(group.meta.twitter).map((h) => '@' + esc(h)).join(' ') : ''}${group && group.meta && group.meta.character ? ' · ' + esc(group.meta.character) : ''}</span>
+        <h3>${rootLabel}
+          <span class="muted"><span class="sec-count">${photos.length}장</span>${group && group.meta && group.meta.twitter ? ' · ' + [].concat(group.meta.twitter).map((h) => '@' + esc(h)).join(' ') : ''}${group && group.meta && group.meta.character ? ' · ' + esc(group.meta.character) : ''}${rootModelInfo}</span>
         </h3>
         ${group ? `<div class="r">
           <button class="grpUp" title="폴더 위로">▲</button>
@@ -432,6 +584,7 @@ function sectionHtml(col, group, photos) {
             <div class="acts">
               <button class="setCover">대표</button>
               <button class="movePh">이동</button>
+              <button class="splitPh" title="세로 2~4등분해서 JPG 저장">세로 분할</button>
               <button class="delPh danger">삭제</button>
             </div>
           </div>`).join('')}
@@ -439,7 +592,19 @@ function sectionHtml(col, group, photos) {
     </div>`
 }
 
-function openCollectionEditor(col) {
+async function openCollectionEditor(col) {
+  let allCols
+  try {
+    allCols = await api('/collections')
+  } catch (error) {
+    alert('컬렉션 목록을 읽지 못했습니다: ' + error.message)
+    return
+  }
+  const eventOptions = allCols
+    .filter((item) => !item.deleted_at && item.shoot_type !== 'session' && String(item.id) !== String(col.id))
+    .map((item) => `<option value="${item.id}" ${String(item.id) === String(col.related_event_id) ? 'selected' : ''}>${esc(item.title)}${item.date ? ` · ${esc(item.date)}` : ''}</option>`)
+    .join('')
+  const sessionModel = collectionSessionModel(col)
   const overlay = document.createElement('div')
   overlay.className = 'grid-maker'
   overlay.innerHTML = `
@@ -448,6 +613,44 @@ function openCollectionEditor(col) {
       <div class="panel">
         <div class="row"><input id="editColTitle" value="${esc(col.title)}" placeholder="제목" /></div>
         <div class="row"><input id="editColDate" value="${esc(col.date || '')}" placeholder="날짜 (예: 2026-05)" /></div>
+        <div class="row">
+          <select id="editColType" aria-label="촬영 유형">
+            <option value="event" ${col.shoot_type !== 'session' ? 'selected' : ''}>행사</option>
+            <option value="session" ${col.shoot_type === 'session' ? 'selected' : ''}>개인 세션</option>
+          </select>
+          <select id="editColLocation" aria-label="촬영 장소">
+            <option value="" ${!col.location_type ? 'selected' : ''}>장소 유형 없음</option>
+            <option value="venue" ${col.location_type === 'venue' ? 'selected' : ''}>행사장</option>
+            <option value="outdoor" ${col.location_type === 'outdoor' ? 'selected' : ''}>야외</option>
+            <option value="studio" ${col.location_type === 'studio' ? 'selected' : ''}>스튜디오</option>
+          </select>
+        </div>
+        <div id="editSessionModelFields" class="session-model-fields" ${col.shoot_type !== 'session' ? 'hidden' : ''}>
+          <div class="form-field">
+            <label for="editSessionModelName">세션 모델명</label>
+            <input id="editSessionModelName" value="${esc(sessionModel.name)}" placeholder="예: 메쨩님 또는 메쨩님 &amp; 하정님" />
+          </div>
+          <div class="form-field">
+            <label for="editSessionModelHandles">모델 X 계정</label>
+            <input id="editSessionModelHandles" value="${esc(sessionModel.twitter.join(', '))}" placeholder="@ 없이 입력, 여러 명이면 쉼표로 구분" />
+          </div>
+          <div class="form-field">
+            <label for="editSessionModelCharacter">캐릭터명</label>
+            <input id="editSessionModelCharacter" value="${esc(sessionModel.character)}" placeholder="예: 체인소 맨 - 레제 &amp; 덴지" />
+          </div>
+          <div class="form-field">
+            <label for="editSessionModelSeries">작품 (장르)</label>
+            <input id="editSessionModelSeries" value="${esc(sessionModel.series.join(', '))}" placeholder="선택 사항" />
+          </div>
+          <div class="field-hint">개인 세션은 이 컬렉션 자체가 모델 세션입니다. 사진은 별도 사람 폴더 없이 개인 세션 사진에 바로 올립니다.</div>
+        </div>
+        <div class="row">
+          <select id="editColRelated" aria-label="관련 행사">
+            <option value="">관련 행사 없음</option>
+            ${eventOptions}
+          </select>
+          <span class="field-hint">개인 세션이 행사 중 촬영이면 연결할 수 있습니다.</span>
+        </div>
         <div class="row"><textarea id="editColDesc" placeholder="설명 (선택)">${esc(col.description || '')}</textarea></div>
         <button class="primary" id="editColSave">저장</button>
       </div>
@@ -457,6 +660,17 @@ function openCollectionEditor(col) {
   const close = () => { document.body.style.overflow = ''; overlay.remove() }
   overlay.querySelector('#editColClose').addEventListener('click', close)
   overlay.addEventListener('click', (event) => { if (event.target === overlay) close() })
+  const type = overlay.querySelector('#editColType')
+  const related = overlay.querySelector('#editColRelated')
+  const sessionModelFields = overlay.querySelector('#editSessionModelFields')
+  const syncTypeFields = () => {
+    const enabled = type.value === 'session'
+    related.disabled = !enabled
+    if (!enabled) related.value = ''
+    sessionModelFields.hidden = !enabled
+  }
+  type.addEventListener('change', syncTypeFields)
+  syncTypeFields()
   overlay.querySelector('#editColSave').addEventListener('click', async () => {
     const title = overlay.querySelector('#editColTitle').value.trim()
     if (!title) return alert('제목을 입력하세요')
@@ -469,6 +683,15 @@ function openCollectionEditor(col) {
           title,
           date: overlay.querySelector('#editColDate').value.trim(),
           description: overlay.querySelector('#editColDesc').value.trim(),
+          shoot_type: type.value,
+          location_type: overlay.querySelector('#editColLocation').value,
+          related_event_id: type.value === 'session' ? (related.value || null) : null,
+          session_model: type.value === 'session' ? {
+            name: overlay.querySelector('#editSessionModelName').value.trim(),
+            twitter: overlay.querySelector('#editSessionModelHandles').value.trim(),
+            character: overlay.querySelector('#editSessionModelCharacter').value.trim(),
+            series: overlay.querySelector('#editSessionModelSeries').value.trim(),
+          } : null,
         },
       })
       close()
@@ -603,7 +826,7 @@ async function renderCollection(id) {
 
   app.innerHTML = `
     <div class="topbar">
-      <h2>${esc(col.title)} <span class="muted">${esc(col.date)}${isFeatured ? ' · 메인에 걸림' : ''}</span></h2>
+      <h2><span class="kind-tag">${collectionKindLabel(col)}</span>${esc(col.title)} <span class="muted">${esc(col.date)}${isFeatured ? ' · 메인에 걸림' : ''}</span></h2>
       <div class="r">
         <button id="backBtn">← 목록</button>
         <div class="admin-menu">
@@ -612,7 +835,7 @@ async function renderCollection(id) {
             <button id="editColBtn">정보 수정</button>
             <button id="publishBtn">${col.published === 0 ? '공개하기' : '비공개로 전환'}</button>
             <button id="featureBtn">${isFeatured ? '메인 해제' : '메인에 걸기'}</button>
-            <button id="newGrpBtn">+ 사람 폴더</button>
+            ${col.shoot_type === 'session' ? '' : '<button id="newGrpBtn">+ 사람 폴더</button>'}
             <button id="gridBtn">그리드 이미지</button>
             <button class="danger" id="delColBtn">컬렉션 삭제</button>
           </div>
@@ -638,7 +861,7 @@ async function renderCollection(id) {
     await api('/collections/' + id, { method: 'PATCH', json: { published } })
     renderCollection(id)
   })
-  document.getElementById('newGrpBtn').addEventListener('click', async () => {
+  document.getElementById('newGrpBtn')?.addEventListener('click', async () => {
     const name = prompt('폴더 이름 (예: 인물/캐릭터 이름)')
     if (!name || !name.trim()) return
     await api(`/collections/${id}/groups`, { method: 'POST', json: { name: name.trim() } })
@@ -744,6 +967,13 @@ async function renderCollection(id) {
         await api('/photos/' + pid, { method: 'PATCH', json: { group_id: groupId } })
         renderCollection(id)
       })
+    }))
+  app.querySelectorAll('.splitPh').forEach((b) =>
+    b.addEventListener('click', (e) => {
+      e.stopPropagation()
+      const pid = +e.target.closest('.admin-ph').dataset.id
+      const photo = col.photos.find((p) => p.id === pid)
+      if (photo) openVerticalSplitDialog(photo)
     }))
   app.querySelectorAll('.delPh').forEach((b) =>
     b.addEventListener('click', async (e) => {
@@ -1155,6 +1385,162 @@ function drawGrid(canvas, images, layout, W, gap, bg, offsetOf, widthMultOf, zoo
     y += h + gap
   }
   return cells
+}
+
+function canvasToBlob(canvas, type, quality) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob)
+      else reject(new Error('JPG 생성에 실패했습니다'))
+    }, type, quality)
+  })
+}
+
+function splitDownloadName(photoId, index, count) {
+  return `photo-${photoId}-split-${String(index + 1).padStart(2, '0')}of${String(count).padStart(2, '0')}.jpg`
+}
+
+function triggerBrowserDownload(blob, filename) {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.style.display = 'none'
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+function openVerticalSplitDialog(photo) {
+  const sourceKey = photo.key_large || photo.key_medium || photo.key_thumb
+  if (!sourceKey) return alert('분할할 원본을 찾을 수 없습니다')
+
+  const { overlay, close } = createAdminDialog('세로 분할', `
+    <div class="split-dialog-body">
+      <div>
+        <div class="split-source-frame">
+          <img id="splitSource" alt="분할할 원본 사진" />
+          <div class="split-guides" id="splitGuides"></div>
+        </div>
+        <div class="field-hint" id="splitSourceInfo">원본 불러오는 중…</div>
+      </div>
+      <div>
+        <div class="split-controls">
+          <label for="splitCount">세로 분할 수</label>
+          <select id="splitCount">
+            <option value="2">2등분</option>
+            <option value="3">3등분</option>
+            <option value="4">4등분</option>
+          </select>
+        </div>
+        <div class="muted" id="splitInfo">분할 결과를 준비하는 중…</div>
+        <div class="split-preview" id="splitPreview"></div>
+        <div class="gm-hint">원본은 변경되지 않습니다. 결과는 왼쪽에서 오른쪽 순서로 개별 JPG로 저장됩니다.</div>
+        <div class="split-status" id="splitStatus" role="status"></div>
+      </div>
+    </div>
+    <div class="dialog-actions">
+      <button type="button" class="dialogCancel">취소</button>
+      <button type="button" class="primary" id="splitDownloadAll" disabled>전체 JPG 저장</button>
+    </div>`)
+  overlay.classList.add('split-dialog')
+
+  const source = overlay.querySelector('#splitSource')
+  const sourceInfo = overlay.querySelector('#splitSourceInfo')
+  const splitCount = overlay.querySelector('#splitCount')
+  const splitGuides = overlay.querySelector('#splitGuides')
+  const splitInfo = overlay.querySelector('#splitInfo')
+  const splitPreview = overlay.querySelector('#splitPreview')
+  const splitStatus = overlay.querySelector('#splitStatus')
+  const downloadAll = overlay.querySelector('#splitDownloadAll')
+  let segments = []
+
+  const saveSegment = async (segment, button) => {
+    const originalText = button.textContent
+    button.disabled = true
+    button.textContent = '생성 중…'
+    try {
+      const blob = await canvasToBlob(segment.canvas, 'image/jpeg', 0.92)
+      triggerBrowserDownload(blob, splitDownloadName(photo.id, segment.index, segment.count))
+      splitStatus.textContent = `${segment.index + 1}/${segment.count} JPG 저장됨`
+    } catch (error) {
+      splitStatus.textContent = '저장 실패: ' + error.message
+    } finally {
+      button.disabled = false
+      button.textContent = originalText
+    }
+  }
+
+  const render = () => {
+    if (!source.naturalWidth || !source.naturalHeight) return
+    const count = Number(splitCount.value)
+    const width = source.naturalWidth
+    const height = source.naturalHeight
+    segments = []
+    splitPreview.innerHTML = ''
+    splitGuides.innerHTML = Array.from({ length: count - 1 }, (_, i) =>
+      `<span style="left:${((i + 1) / count) * 100}%"></span>`).join('')
+    const widths = []
+
+    for (let i = 0; i < count; i++) {
+      const x0 = Math.floor(width * i / count)
+      const x1 = Math.floor(width * (i + 1) / count)
+      const partWidth = x1 - x0
+      const canvas = document.createElement('canvas')
+      canvas.width = partWidth
+      canvas.height = height
+      canvas.getContext('2d').drawImage(source, x0, 0, partWidth, height, 0, 0, partWidth, height)
+      const segment = { canvas, index: i, count, width: partWidth, height }
+      segments.push(segment)
+      widths.push(partWidth)
+
+      const piece = document.createElement('div')
+      piece.className = 'split-piece'
+      const label = document.createElement('span')
+      label.className = 'label'
+      label.textContent = `${i + 1}/${count} · ${partWidth}×${height}px`
+      const saveButton = document.createElement('button')
+      saveButton.type = 'button'
+      saveButton.textContent = 'JPG 저장'
+      saveButton.addEventListener('click', () => saveSegment(segment, saveButton))
+      piece.append(canvas, label, saveButton)
+      splitPreview.append(piece)
+    }
+
+    sourceInfo.textContent = `원본 ${width}×${height}px`
+    splitInfo.textContent = `${count}장 · ${widths.join('px / ')}px × ${height}px`
+    splitStatus.textContent = ''
+    downloadAll.disabled = false
+  }
+
+  source.addEventListener('load', render)
+  source.addEventListener('error', () => {
+    sourceInfo.textContent = '원본을 불러오지 못했습니다.'
+    splitInfo.textContent = '분할할 수 없습니다.'
+    downloadAll.disabled = true
+  })
+  splitCount.addEventListener('change', render)
+  overlay.querySelector('.dialogCancel').addEventListener('click', close)
+  downloadAll.addEventListener('click', async () => {
+    if (!segments.length) return
+    downloadAll.disabled = true
+    downloadAll.textContent = '저장 중…'
+    try {
+      for (const segment of segments) {
+        const blob = await canvasToBlob(segment.canvas, 'image/jpeg', 0.92)
+        triggerBrowserDownload(blob, splitDownloadName(photo.id, segment.index, segment.count))
+        await new Promise((resolve) => setTimeout(resolve, 80))
+      }
+      splitStatus.textContent = `${segments.length}개 JPG 저장됨`
+    } catch (error) {
+      splitStatus.textContent = '저장 실패: ' + error.message
+    } finally {
+      downloadAll.disabled = false
+      downloadAll.textContent = '전체 JPG 저장'
+    }
+  })
+  source.src = '/img/' + sourceKey
 }
 
 // 전체 컬렉션/폴더의 사진을 모아 그리드 메이커 오픈

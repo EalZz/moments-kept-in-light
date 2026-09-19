@@ -524,7 +524,7 @@ html { color-scheme: dark; scrollbar-gutter: stable; } /* 스크롤바 공간 �
 body {
   background: var(--bg);
   color: var(--fg);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo",
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo",
     "Noto Sans KR", sans-serif;
   -webkit-font-smoothing: antialiased;
   line-height: 1.6;
@@ -1111,6 +1111,174 @@ main.wrap { padding-top: 76px; }
   padding-bottom: 2px;
 }
 .card:hover .meta .title { background-size: 100% 1px; }
+.card .session-subtitle {
+  margin-top: 8px;
+  color: var(--fg-faint);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  line-height: 1.35;
+}
+
+/* 홈 컬렉션 분류 — 행사와 개인 세션을 같은 목록 안에서 섞지 않음 */
+.collection-index .col-head { padding-bottom: 42px; }
+.collection-block + .collection-block { margin-top: 12px; }
+.collection-block { --collection-fold-y: 1700px; }
+.collection-block-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 0 24px;
+  border-top: 1px solid var(--border);
+}
+.collection-block-title {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+.collection-block-head h3 {
+  font-family: var(--font-display);
+  font-size: 27px;
+  font-weight: 500;
+  color: var(--fg);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.collection-block-head .date {
+  margin-top: 0;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo",
+    "Noto Sans KR", sans-serif;
+  font-size: 11px;
+  color: var(--fg-faint);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+.collection-list-shell {
+  position: relative;
+}
+.collection-block .collections {
+  position: relative;
+  transition: max-height .72s cubic-bezier(.22, .61, .36, 1);
+}
+.collection-block .collections.is-collapsed {
+  max-height: var(--collection-fold-y);
+  overflow: hidden;
+  padding-bottom: 0;
+}
+.collection-block .collections.is-animating {
+  overflow: hidden;
+}
+.collection-block .collections.is-overflowing::before,
+.collection-block .collections.is-overflowing::after {
+  content: '';
+  position: absolute;
+  inset: auto 0 0;
+  height: 300px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .48s ease;
+}
+.collection-block .collections.is-collapsed.is-overflowing::before,
+.collection-block .collections.is-collapsed.is-overflowing::after {
+  opacity: 1;
+}
+.collection-block .collections.is-overflowing::before {
+  z-index: 2;
+  background: rgba(11, 11, 13, 0.04);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    rgba(0, 0, 0, 0.04) 14%,
+    rgba(0, 0, 0, 0.22) 38%,
+    rgba(0, 0, 0, 0.62) 70%,
+    #000 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    rgba(0, 0, 0, 0.04) 14%,
+    rgba(0, 0, 0, 0.22) 38%,
+    rgba(0, 0, 0, 0.62) 70%,
+    #000 100%
+  );
+}
+.collection-block .collections.is-overflowing::after {
+  z-index: 3;
+  background: linear-gradient(
+    to bottom,
+    rgba(11, 11, 13, 0) 0%,
+    rgba(11, 11, 13, 0.04) 18%,
+    rgba(11, 11, 13, 0.32) 54%,
+    rgba(11, 11, 13, 0.78) 84%,
+    var(--bg) 100%
+  );
+}
+.collection-toggle {
+  position: absolute;
+  z-index: 4;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  display: flex;
+  width: 72px;
+  height: 72px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: rgba(255, 255, 255, 0.78);
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+  background: transparent;
+  box-shadow: none;
+  transition: color .25s;
+}
+.collection-list-shell.is-expanded .collection-toggle {
+  position: relative;
+  left: auto;
+  bottom: auto;
+  transform: none;
+  width: 72px;
+  height: 72px;
+  margin: 28px auto 0;
+}
+.collection-toggle[hidden] { display: none; }
+.collection-toggle:hover,
+.collection-toggle:focus-visible {
+  color: rgba(255, 255, 255, 1);
+  background: transparent;
+  box-shadow: none;
+}
+.collection-toggle:focus-visible {
+  outline: 1px solid rgba(255, 255, 255, 0.7);
+  outline-offset: 3px;
+}
+.collection-toggle-arrow {
+  color: inherit;
+  font-size: 32px;
+  font-weight: 300;
+  line-height: 1;
+  letter-spacing: 0;
+  opacity: .78;
+  transition: opacity .25s, transform .25s;
+}
+.collection-toggle:hover .collection-toggle-arrow,
+.collection-toggle:focus-visible .collection-toggle-arrow {
+  opacity: 1;
+  transform: translateY(2px);
+}
+.collection-block--session .collections { gap: 34px; }
+.collection-block--session .collections .mcol { gap: 52px; }
+.card--session .meta { padding-top: 18px; }
 
 @media (max-width: 620px) {
   .collections { gap: 12px; padding-bottom: 72px; }
@@ -1119,6 +1287,23 @@ main.wrap { padding-top: 76px; }
   .card .meta { padding-top: 11px; }
   .card .meta .info { font-size: 9px; letter-spacing: 0.12em; }
   .card .meta .title { font-size: 20px; }
+  .collection-index .col-head { padding-bottom: 30px; }
+  .collection-block { --collection-fold-y: 980px; }
+  .collection-block-head {
+    align-items: center;
+    padding: 14px 0 18px;
+  }
+  .collection-block-title { display: block; }
+  .collection-block-head h3 { font-size: 22px; }
+  .collection-block-title .date { margin-top: 5px; }
+  .collection-toggle { bottom: 22px; width: 64px; height: 64px; font-size: 9px; }
+  .collection-block--session .collections .mcol { gap: 36px; }
+}
+
+@media (max-width: 620px) {
+  .collection-block { --collection-fold-y: 900px; }
+  .collection-block .collections.is-overflowing::before,
+  .collection-block .collections.is-overflowing::after { height: 230px; }
 }
 
 /* ---------- collection detail ---------- */
@@ -1207,6 +1392,8 @@ main.wrap { padding-top: 76px; }
 @media (max-width: 640px) {
   .jgrid { gap: 8px; padding-bottom: 40px; }
   .jrow { gap: 8px; }
+  .session-identity-subtitle { margin-top: 12px; font-size: 13px; letter-spacing: 0.07em; }
+  .session-identity-accounts { font-size: 10px; }
 }
 .jrow .ph {
   /* button 요소입니다(키보드로 사진 열기). 기본 버튼 외형은 지우고 타일 모양만 남깁니다. */
@@ -1231,6 +1418,94 @@ main.wrap { padding-top: 76px; }
   transition: opacity 0.25s ease;
 }
 .jrow .ph:hover img { opacity: 0.85; }
+
+/* 개인 세션 상세 — 적은 사진도 넓은 빈 줄로 흩어지지 않게 리드 + 에디토리얼 2열 */
+.session-head .shoot-kind {
+  color: var(--fg-faint);
+  font-size: 10px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  margin-bottom: 14px;
+}
+.session-identity-subtitle {
+  margin-top: 16px;
+  color: var(--fg-dim);
+  font-family: var(--font-display);
+  font-size: 15px;
+  line-height: 1.35;
+  letter-spacing: 0.1em;
+}
+.session-identity-accounts {
+  margin-top: 9px;
+  color: var(--fg-faint);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+.session-identity-accounts a { color: var(--fg-faint); transition: color 0.2s ease; }
+.session-identity-accounts a:hover { color: var(--fg); }
+.session-head .related-event {
+  display: inline-block;
+  margin-top: 22px;
+  color: var(--fg-faint);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  transition: color 0.2s ease;
+}
+.session-head .related-event:hover { color: var(--fg-dim); }
+.session-gallery {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding-bottom: 56px;
+}
+.session-lead {
+  max-width: 760px;
+  margin: 0 auto 22px;
+}
+.session-gallery .ph {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: none;
+  color: inherit;
+  background: var(--bg-soft);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  border-radius: var(--radius);
+  overflow: hidden;
+  cursor: zoom-in;
+}
+.session-gallery .ph:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+.session-gallery .ph img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: opacity 0.25s ease;
+}
+.session-gallery .ph:hover img { opacity: 0.85; }
+.session-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 20px;
+}
+.session-grid.is-single {
+  grid-template-columns: minmax(0, 760px);
+  justify-content: center;
+}
+.session-grid.is-odd .ph:last-child {
+  grid-column: 1 / -1;
+  width: min(68%, 720px);
+  justify-self: center;
+}
+@media (max-width: 640px) {
+  .session-gallery { padding-bottom: 40px; }
+  .session-lead { margin-bottom: 10px; }
+  .session-grid { grid-template-columns: 1fr; gap: 10px; }
+  .session-grid.is-single { grid-template-columns: 1fr; }
+  .session-grid.is-odd .ph:last-child { grid-column: auto; width: 100%; }
+  .session-models { gap: 16px 24px; margin-top: 18px; }
+  .session-model-name { font-size: 17px; }
+}
 
 .group-sec { padding-top: 16px; scroll-margin-top: 84px; border-radius: 8px; }
 .group-sec.flash { animation: sec-flash 1.8s ease 0.5s backwards; }
@@ -1513,6 +1788,7 @@ main.wrap { padding-top: 76px; }
 
 /* ---------- contact / about teaser ---------- */
 .about-teaser {
+  padding-top: 104px;
   padding-bottom: 110px;
   max-width: 560px;
   margin: 0 auto;
@@ -1521,6 +1797,9 @@ main.wrap { padding-top: 76px; }
 .about-teaser .about-p { margin-bottom: 22px; }
 .about-teaser .sec-kicker { justify-content: center; }
 .about-teaser .contact-links { justify-content: center; }
+@media (max-width: 640px) {
+  .about-teaser { padding-top: 72px; }
+}
 .contact { padding-bottom: 110px; }
 .contact-copy { font-size: 14px; color: var(--fg-dim); margin-bottom: 24px; }
 .contact-links { display: flex; flex-wrap: wrap; gap: 14px; }
