@@ -1196,7 +1196,7 @@ main.wrap { padding-top: 76px; }
 .view-toggle button:hover { color: var(--fg-dim); }
 .view-toggle button.on { background: var(--bg-soft); color: var(--fg); }
 
-/* justified 행 배치 — 줄마다 좌우 꽉 참, 빈칸 없음 */
+/* justified 행 배치 — 높이 범위를 우선하고 남는 공간은 오른쪽에 둠 */
 .jgrid {
   display: flex;
   flex-direction: column;
@@ -1216,8 +1216,8 @@ main.wrap { padding-top: 76px; }
   font: inherit;
   color: inherit;
   box-shadow: inset 0 0 0 1px var(--hairline);
-  flex-shrink: 1;
-  flex-basis: 0;
+  flex: 0 0 auto;
+  height: 100%;
   min-width: 0;
   cursor: zoom-in;
   background: var(--bg-soft);
@@ -1231,7 +1231,6 @@ main.wrap { padding-top: 76px; }
   transition: opacity 0.25s ease;
 }
 .jrow .ph:hover img { opacity: 0.85; }
-.jrow .jfill { flex-shrink: 1; flex-basis: 0; }
 
 .group-sec { padding-top: 16px; scroll-margin-top: 84px; border-radius: 8px; }
 .group-sec.flash { animation: sec-flash 1.8s ease 0.5s backwards; }

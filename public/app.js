@@ -698,33 +698,58 @@ async function renderHome() {
 // ---------- collection ----------
 let current = null // { photos, index } — 라이트박스가 넘겨볼 사진 목록
 
-// ---------- justified 행 배치: 가로 줄 단위로 꽉 차게, 빈칸 없음 ----------
+// ---------- justified 행 배치: 원본 비율을 유지하며 줄 높이 편차 제한 ----------
 let jSets = null // [{ photos, offset }] — 현재 컬렉션 페이지의 각 그리드
-let jLastW = 0
+let jResizeFrame = 0
 
 function aspectOf(p) {
-  return p.width && p.height ? p.width / p.height : 0.75
+  const ratio = p.width / p.height
+  return Number.isFinite(ratio) && ratio > 0 ? ratio : 0.75
 }
 
-function justifiedHtml(photos, offset, containerW) {
+function justifiedRows(photos, containerW, gap) {
+  if (!photos.length || containerW <= 0) return []
   const targetH = containerW < 640 ? 240 : 340 // 목표 줄 높이(px)
-  const threshold = containerW / targetH // 한 줄의 비율 합 목표
+  const minH = targetH * 0.85
+  const maxH = targetH * 1.15
+  const ratios = photos.map(aspectOf)
+  const costs = new Array(photos.length + 1).fill(Infinity)
+  const choices = new Array(photos.length)
+  costs[photos.length] = 0
+  // 뒤쪽 줄까지 비교하여 마지막 몇 장 때문에 앞뒤 줄 높이가 크게 달라지지 않게 합니다.
+  for (let start = photos.length - 1; start >= 0; start--) {
+    let sum = 0
+    for (let end = start; end < photos.length; end++) {
+      sum += ratios[end]
+      const available = containerW - gap * (end - start)
+      const fitH = available / sum
+      // 한 장짜리 파노라마는 화면 폭에 맞추는 것을 우선합니다.
+      if (end > start && fitH < minH) break
+      const height = fitH > maxH ? targetH : fitH
+      const blank = Math.max(0, available - sum * height) / containerW
+      const deviation = (height - targetH) / targetH
+      const cost = deviation * deviation + 4 * blank * blank + 0.08 + costs[end + 1]
+      if (cost < costs[start]) {
+        costs[start] = cost
+        choices[start] = { start, end: end + 1, height }
+      }
+    }
+  }
   const rows = []
-  let row = [], sum = 0
-  photos.forEach((p, i) => {
-    row.push({ p, i: offset + i })
-    sum += aspectOf(p)
-    if (sum >= threshold) { rows.push({ row, sum }); row = []; sum = 0 }
-  })
-  if (row.length) rows.push({ row, sum, last: true })
+  for (let start = 0; start < photos.length;) {
+    const row = choices[start]
+    rows.push(row)
+    start = row.end
+  }
+  return rows
+}
 
-  return rows.map(({ row, sum, last }) => {
-    // 마지막 줄이 많이 비면 확대하지 않고 빈 공간으로 채움 (사진이 과하게 커지는 것 방지)
-    const fill = last && sum < threshold * 0.65 ? threshold - sum : 0
-    return `<div class="jrow">${row.map(({ p, i }) => `
-      <button type="button" class="ph" data-i="${i}" aria-label="${esc(photoAltText(p) || '사진')} 크게 보기" style="flex-grow:${aspectOf(p).toFixed(4)}; aspect-ratio:${p.width || 3}/${p.height || 4}">
+function justifiedHtml(photos, offset, containerW, gap) {
+  return justifiedRows(photos, containerW, gap).map(({ start, end, height }) => {
+    return `<div class="jrow" style="height:${height}px;gap:${gap}px">${photos.slice(start, end).map((p, i) => `
+      <button type="button" class="ph" data-i="${offset + start + i}" aria-label="${esc(photoAltText(p) || '사진')} 크게 보기" style="width:${aspectOf(p) * height}px">
         <img src="/img/${esc(p.key_thumb)}" alt="${esc(photoAltText(p))}" loading="lazy" data-fade />
-      </button>`).join('')}${fill ? `<div class="jfill" style="flex-grow:${fill.toFixed(4)}"></div>` : ''}</div>`
+      </button>`).join('')}</div>`
   }).join('')
 }
 
@@ -734,16 +759,15 @@ function layoutJustifiedAll() {
   if (!grids.length) return
   const w = grids[0].clientWidth
   if (!w) return
-  jLastW = w
   grids.forEach((el, gi) => {
     const set = jSets[gi]
-    if (set) el.innerHTML = justifiedHtml(set.photos, set.offset, w)
+    if (set) el.innerHTML = justifiedHtml(set.photos, set.offset, el.clientWidth, parseFloat(getComputedStyle(el).rowGap) || 0)
   })
   markLoadedImages()
 }
 window.addEventListener('resize', () => {
-  const g = document.querySelector('.jgrid')
-  if (g && Math.abs(g.clientWidth - jLastW) > 40) layoutJustifiedAll()
+  cancelAnimationFrame(jResizeFrame)
+  jResizeFrame = requestAnimationFrame(layoutJustifiedAll)
 })
 
 async function renderCollection(id, focusGroup = null) {
