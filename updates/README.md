@@ -4,16 +4,18 @@
 
 원하는 기능의 설명과 ZIP만 받으세요. ZIP 안의 `CODEX.md` 요청문을 본인 프로젝트를 연 Codex에 붙여 넣으면 적용을 맡길 수 있습니다. 코드가 달라 자동 적용이 어려운 경우에도 변경 부분을 비교하는 자료로 사용할 수 있습니다.
 
-[기능별 ZIP 내려받기](https://github.com/EalZz/moments-kept-in-light/releases/tag/feature-updates-2026-10-26) · [처음 설치하기](../SETUP.md) · [적용·복구 안내](APPLY.md)
+[전체 기능 종류·사용 예시](../FEATURES.md) · [기능별 ZIP 내려받기](https://github.com/EalZz/moments-kept-in-light/releases/tag/feature-updates-2026-10-26) · [처음 설치하기](../SETUP.md) · [적용·복구 안내](APPLY.md)
 
 ## 선택 업데이트
 
-| 필요한 기능 | 설명 | 먼저 필요한 기능 | 다운로드 |
+| 필요한 기능·사용 예시 | 설명 | 먼저 필요한 기능 | 다운로드 |
 |---|---|---|---|
-| [사람별 모델 표시 이름](modules/model-display-names/README.md) | 여러 모델의 이름을 계정별로 저장하고 표시 | 없음 | [ZIP](https://github.com/EalZz/moments-kept-in-light/releases/download/feature-updates-2026-10-26/model-display-names-1.0.0.zip) |
-| [트윗 정보 선택 가져오기](modules/tweet-import-select/README.md) | 가져올 정보 확인·선택, 사진 제외 가능 | 사람별 모델 표시 이름 | [ZIP](https://github.com/EalZz/moments-kept-in-light/releases/download/feature-updates-2026-10-26/tweet-import-select-1.0.0.zip) |
-| [갤러리 배치 개선](modules/gallery-layout/README.md) | 모바일 홀수 사진·가로세로 혼합 배치, PC 중앙 정렬 | 없음 | [ZIP](https://github.com/EalZz/moments-kept-in-light/releases/download/feature-updates-2026-10-26/gallery-layout-1.0.0.zip) |
-| [메인 사진 전환 안정화](modules/featured-photo-transition/README.md) | 다음 사진 준비 후 전환, 실패·연속 조작 처리 | 없음 | [ZIP](https://github.com/EalZz/moments-kept-in-light/releases/download/feature-updates-2026-10-26/featured-photo-transition-1.0.0.zip) |
+| [사람별 모델 표시 이름](../docs/features/model-display-names.md) | 여러 모델의 이름을 계정별로 저장하고 표시 | 없음 | [ZIP](https://github.com/EalZz/moments-kept-in-light/releases/download/feature-updates-2026-10-26/model-display-names-1.0.0.zip) |
+| [트윗 정보 선택 가져오기](../docs/features/tweet-import-select.md) | 가져올 정보 확인·선택, 사진 제외 가능 | 사람별 모델 표시 이름 | [ZIP](https://github.com/EalZz/moments-kept-in-light/releases/download/feature-updates-2026-10-26/tweet-import-select-1.0.0.zip) |
+| [갤러리 배치 개선](../docs/features/gallery-layout.md) | 모바일 홀수 사진·가로세로 혼합 배치, PC 중앙 정렬 | 없음 | [ZIP](https://github.com/EalZz/moments-kept-in-light/releases/download/feature-updates-2026-10-26/gallery-layout-1.0.0.zip) |
+| [메인 사진 전환 안정화](../docs/features/featured-photo-transition.md) | 다음 사진 준비 후 전환, 실패·연속 조작 처리 | 없음 | [ZIP](https://github.com/EalZz/moments-kept-in-light/releases/download/feature-updates-2026-10-26/featured-photo-transition-1.0.0.zip) |
+
+각 기능 이름을 누르면 기능 설명과 사용 예시가 열립니다. 해당 페이지 아래에 적용 설명서·다운로드·Codex 요청문 링크가 있습니다.
 
 트윗 선택 기능만 필요하다면 **표시 이름 → 트윗 선택** 순서로 두 묶음을 적용합니다. 갤러리나 메인 사진 전환은 선택하지 않아도 됩니다.
 

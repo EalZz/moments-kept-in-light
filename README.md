@@ -22,13 +22,22 @@
 
 ---
 
-## 기존 사용자를 위한 선택 업데이트
+## 기능을 찾아보세요
 
-**[필요한 기능만 골라 업데이트하기 →](updates/README.md)**
+**[전체 기능 종류와 설명 →](FEATURES.md)** · [필요한 기능만 업데이트](updates/README.md) · [기능별 ZIP 다운로드](https://github.com/EalZz/moments-kept-in-light/releases/tag/feature-updates-2026-10-26)
 
-이미 배포한 분은 [기능별 ZIP](https://github.com/EalZz/moments-kept-in-light/releases/tag/feature-updates-2026-10-26)과 적용 설명서를 이용할 수 있습니다. 각 ZIP에 Codex 요청문과 읽기 전용 적용 검사기를 제공합니다. 트윗 선택 가져오기, 사람별 모델 표시 이름, 갤러리 배치, 메인 사진 전환을 기능별로 구분했습니다.
+| 종류 | 기능 설명 | 제공 형태 |
+|---|---|---|
+| 촬영·사진 정리 | [행사·개인 세션](docs/features/collections.md) · [업로드·이미지 변환](docs/features/photo-upload.md) · [순서·대표 사진·공개](docs/features/gallery-management.md) | 기본 포함 |
+| 정보 가져오기 | [트윗에서 필요한 정보만 선택](docs/features/tweet-import-select.md) | 선택 업데이트 |
+| 모델·크레딧 | [계정별 모델 표시 이름](docs/features/model-display-names.md) | 선택 업데이트 |
+| 갤러리 표시 | [모바일·PC 사진 배치](docs/features/gallery-layout.md) · [메인 사진 전환 안정화](docs/features/featured-photo-transition.md) | 선택 업데이트 |
+| 탐색·검색 | [모델·작품·캐릭터 검색과 별칭](docs/features/discovery.md) | 기본 포함 |
+| 보관·복구 | [휴지통·백업·복구](docs/features/backup-recovery.md) | 기본 포함 |
 
-원본 실행 코드의 기준은 유지하며, 선택 업데이트를 적용해야 해당 개선이 반영됩니다. 개인 설정과 사진을 포함한 전체 폴더를 교체하지 마세요.
+기능 설명에서 **무엇이 달라지는지 → 사용 예시 → 적용 조건 → 다운로드·Codex 요청문** 순서로 확인할 수 있습니다. 기존 사용자는 필요한 업데이트만 선택하세요. 트윗 선택 기능은 모델 표시 이름 업데이트가 먼저 필요합니다.
+
+기준 배포본의 실행 코드는 유지합니다. 개인 설정과 사진을 포함한 전체 폴더를 교체하지 마세요.
 
 ## 현재 구조
 
