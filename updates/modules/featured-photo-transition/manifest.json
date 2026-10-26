@@ -1,0 +1,25 @@
+{
+  "id": "featured-photo-transition",
+  "version": "1.0.0",
+  "title": "메인 사진 전환 안정화",
+  "baseCommit": "c1e54c341b420e2307ae381faa7be895b4c7a265",
+  "requires": [],
+  "databaseMigrations": [],
+  "files": [
+    {
+      "path": "public/app.js",
+      "beforeSha256": "7fddd58ff97a7c71dd2ef106ac275d5a1f21c969a86618a5fd520fbfb20045a9",
+      "afterSha256": "eebdae450e9aa1e0c79c8ff52518d1642ce5016fa3e9aa81caa6dc61f21688e0"
+    },
+    {
+      "path": "test/feature-transition.node.mjs",
+      "beforeSha256": null,
+      "afterSha256": "d25620055cd34781742dc2e54ce92d65b127e8892ec99ed73dfd35ce75d5165b"
+    }
+  ],
+  "tests": [
+    "node --test test/feature-transition.node.mjs"
+  ],
+  "patchSha256": "b4cda62234956bdb070da0169a20b57a22693292fba338510dc5a0d357dacb7e",
+  "requiredMarkers": []
+}

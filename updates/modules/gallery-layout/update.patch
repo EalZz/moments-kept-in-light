@@ -1,0 +1,197 @@
+diff --git a/public/app.js b/public/app.js
+--- a/public/app.js
++++ b/public/app.js
+@@ -908,11 +908,42 @@
+   return rows
+ }
+ 
+-function justifiedHtml(photos, offset, containerW, gap) {
+-  return justifiedRows(photos, containerW, gap).map(({ start, end, height }) => {
+-    return `<div class="jrow" style="height:${height}px;gap:${gap}px">${photos.slice(start, end).map((p, i) => `
++function mobileRows(photos, containerW, gap) {
++  if (!photos.length || containerW <= 0) return []
++  const rows = []
++  const ratios = photos.map(aspectOf)
++  for (let start = 0; start < photos.length;) {
++    if (ratios[start] >= 1) {
++      rows.push({ start, end: start + 1, height: containerW / ratios[start] })
++      start++
++      continue
++    }
++    let runEnd = start + 1
++    while (runEnd < photos.length && ratios[runEnd] < 1) runEnd++
++    // 세로 사진 묶음이 홀수면 첫 장을 강조하고 나머지를 두 장씩 배치합니다.
++    if ((runEnd - start) % 2) {
++      rows.push({ start, end: start + 1, height: containerW / ratios[start] })
++      start++
++    }
++    for (; start < runEnd; start += 2) {
++      rows.push({ start, end: start + 2, height: (containerW - gap) / (ratios[start] + ratios[start + 1]) })
++    }
++  }
++  return rows
++}
++
++function justifiedHtml(photos, offset, containerW, gap, centerSparse = false, mobile = containerW <= 640) {
++  const sparse = !mobile && centerSparse && photos.length > 0 && photos.length <= 2 && containerW > 0
++  const rows = mobile
++    ? mobileRows(photos, containerW, gap)
++    : sparse
++    ? [{ start: 0, end: photos.length, height: Math.min(containerW < 640 ? 240 : 460,
++      (containerW - gap * (photos.length - 1)) / photos.reduce((sum, p) => sum + aspectOf(p), 0)) }]
++    : justifiedRows(photos, containerW, gap)
++  return rows.map(({ start, end, height }) => {
++    return `<div class="jrow${sparse ? ' jrow--centered' : ''}" style="height:${height}px;gap:${gap}px">${photos.slice(start, end).map((p, i) => `
+       <button type="button" class="ph" data-i="${offset + start + i}" aria-label="${esc(photoAltText(p) || '사진')} 크게 보기" style="width:${aspectOf(p) * height}px">
+-        <img src="/img/${esc(p.key_thumb)}" alt="${esc(photoAltText(p))}" loading="lazy" data-fade />
++        <img src="/img/${esc(sparse || (mobile && end - start === 1) ? p.key_medium || p.key_large || p.key_thumb : p.key_thumb)}" alt="${esc(photoAltText(p))}" loading="lazy" data-fade />
+       </button>`).join('')}</div>`
+   }).join('')
+ }
+@@ -925,7 +956,7 @@
+   if (!w) return
+   grids.forEach((el, gi) => {
+     const set = jSets[gi]
+-    if (set) el.innerHTML = justifiedHtml(set.photos, set.offset, el.clientWidth, parseFloat(getComputedStyle(el).rowGap) || 0)
++    if (set) el.innerHTML = justifiedHtml(set.photos, set.offset, el.clientWidth, parseFloat(getComputedStyle(el).rowGap) || 0, set.centerSparse, window.innerWidth <= 640)
+   })
+   markLoadedImages()
+ }
+@@ -1036,7 +1067,7 @@
+     offset += ungrouped.length
+   }
+   const sectionBlocks = sections.map((s) => {
+-    jSets.push({ photos: s.photos, offset })
++    jSets.push({ photos: s.photos, offset, centerSparse: true })
+     offset += s.photos.length
+     return `
+       <section class="group-sec">
+@@ -1553,7 +1584,7 @@
+   jSets = []
+   let offset = 0
+   const blocks = m.sections.map((s) => {
+-    jSets.push({ photos: s.photos, offset })
++    jSets.push({ photos: s.photos, offset, centerSparse: true })
+     offset += s.photos.length
+     return `
+       <section class="group-sec">
+diff --git a/public/style.css b/public/style.css
+--- a/public/style.css
++++ b/public/style.css
+@@ -1388,7 +1388,8 @@
+   gap: 14px;
+   padding-bottom: 56px;
+ }
+-.jrow { display: flex; gap: 14px; }
++.jrow { display: flex; justify-content: center; gap: 14px; }
++.jrow--centered { justify-content: center; }
+ @media (max-width: 640px) {
+   .jgrid { gap: 8px; padding-bottom: 40px; }
+   .jrow { gap: 8px; }
+diff --git a/test/gallery-layout.node.mjs b/test/gallery-layout.node.mjs
+--- a/test/gallery-layout.node.mjs
++++ b/test/gallery-layout.node.mjs
+@@ -6,7 +6,7 @@
+ // app.js는 DOM에서 실행되는 일반 스크립트이므로 순수 배치 함수만 읽어 검증합니다.
+ const source = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8')
+ const functions = source.slice(source.indexOf('function aspectOf('), source.indexOf('function layoutJustifiedAll('))
+-const { justifiedRows, justifiedHtml, aspectOf } = runInNewContext(`${functions}\n({ justifiedRows, justifiedHtml, aspectOf })`, {
++const { justifiedRows, mobileRows, justifiedHtml, aspectOf } = runInNewContext(`${functions}\n({ justifiedRows, mobileRows, justifiedHtml, aspectOf })`, {
+   esc: (value) => String(value), photoAltText: () => '',
+ })
+ const photos = (ratios) => ratios.map((ratio) => ({ width: ratio * 1000, height: 1000, key_thumb: 'test' }))
+@@ -52,3 +52,94 @@
+   const rows = justifiedRows(photos([0.75, 0.75, 0.75, 0.75]), 900, 14)
+   assert.deepEqual(Array.from(rows, (row) => row.end - row.start), [2, 2])
+ })
++
++test('mobile odd sets fill the first row without cropping and preserve lightbox order', () => {
++  for (const width of [280, 319, 390, 640]) {
++    for (const count of [1, 3, 5, 7]) {
++      for (const ratio of [2 / 3, 0.75, 1.5, 8]) {
++        const items = photos(Array(count).fill(2 / 3))
++        items[0] = { ...photos([ratio])[0], key_medium: 'lead-medium' }
++        const html = justifiedHtml(items, 17, width, 8, true, true)
++        const height = +html.match(/height:([\d.]+)px/)[1]
++        const tileWidth = +html.match(/style="width:([\d.]+)px"/)[1]
++        assert.ok(Math.abs(tileWidth - width) < 1e-8)
++        assert.ok(Math.abs(tileWidth / height - ratio) < 1e-8)
++        assert.ok(html.includes('src="/img/lead-medium"'))
++        assert.deepEqual([...html.matchAll(/data-i="(\d+)"/g)].map((m) => +m[1]), items.map((_, i) => i + 17))
++        if (width === 319) {
++          const counts = html.split('<div class="jrow').slice(1).map((row) => [...row.matchAll(/data-i=/g)].length)
++          assert.deepEqual(counts, [1, ...Array((count - 1) / 2).fill(2)])
++        }
++      }
++    }
++  }
++  // PC는 컨테이너가 좁아도 기존 행 높이를 유지합니다.
++  assert.equal(+justifiedHtml(photos([2 / 3, 2 / 3, 2 / 3]), 0, 319, 8, false, false).match(/height:([\d.]+)px/)[1], 240)
++})
++
++test('desktop small model groups enlarge without cropping, overflow or changing lightbox order', () => {
++  for (const width of [280, 390, 640, 1144]) {
++    for (const ratios of [[0.75], [0.75, 0.75], [1.5, 0.75], [8, 0.75]]) {
++      const items = photos(ratios).map((p) => ({ ...p, key_medium: 'medium' }))
++      const html = justifiedHtml(items, 9, width, 14, true, false)
++      const height = +html.match(/height:([\d.]+)px/)[1]
++      const widths = [...html.matchAll(/style="width:([\d.]+)px"/g)].map((m) => +m[1])
++      assert.ok(widths.reduce((sum, w) => sum + w, 0) + 14 * (items.length - 1) <= width + 1e-8)
++      widths.forEach((w, i) => assert.ok(Math.abs(w / height - ratios[i]) < 1e-8))
++      assert.deepEqual([...html.matchAll(/data-i="(\d+)"/g)].map((m) => +m[1]), items.map((_, i) => i + 9))
++      assert.equal([...html.matchAll(/src="\/img\/medium"/g)].length, items.length)
++    }
++  }
++  assert.equal(+justifiedHtml(photos([0.75]), 0, 1144, 14, true).match(/height:([\d.]+)px/)[1], 460)
++  assert.equal(justifiedHtml(photos([0.75, 0.75, 0.75]), 0, 1144, 14, true),
++    justifiedHtml(photos([0.75, 0.75, 0.75]), 0, 1144, 14))
++})
++
++test('mobile mixed photo regressions use full-width landscapes and portrait pairs', () => {
++  const cases = [
++    // 첨부 1: 츄비, 첨부 2: 제제, 첨부 3: 키위새의 실제 사진 크기.
++    { dimensions: [[1468, 2048], [1520, 2048], [2048, 1416]], counts: [2, 1] },
++    { dimensions: [[1484, 2048], [2048, 1365], [1585, 2048], [1365, 2048], [1239, 2048]], counts: [1, 1, 1, 2] },
++    { dimensions: [[1365, 2048], [1365, 2048], [1255, 2048], [2048, 1325]], counts: [1, 2, 1] },
++    { dimensions: [[1365, 2048], [2048, 1365]], counts: [1, 1] },
++    { dimensions: [[2048, 1365], [1365, 2048]], counts: [1, 1] },
++    { dimensions: [[2048, 1365], [2048, 1365]], counts: [1, 1] },
++    { dimensions: [[1000, 1000], [1365, 2048], [1365, 2048]], counts: [1, 2] },
++  ]
++  for (const width of [280, 319, 355, 390, 640]) {
++    for (const { dimensions, counts } of cases) {
++      const items = dimensions.map(([width, height]) => ({ width, height, key_thumb: 'thumb', key_medium: 'medium' }))
++      const rows = mobileRows(items, width, 8)
++      assert.deepEqual(Array.from(rows, (r) => r.end - r.start), counts)
++      const html = justifiedHtml(items, 11, width, 8, true, true)
++      assert.deepEqual([...html.matchAll(/data-i="(\d+)"/g)].map((m) => +m[1]), items.map((_, i) => 11 + i))
++      for (const row of rows) {
++        const ratios = items.slice(row.start, row.end).map(aspectOf)
++        const used = ratios.reduce((sum, ratio) => sum + ratio * row.height, 0) + 8 * (ratios.length - 1)
++        assert.ok(Math.abs(used - width) < 1e-8, 'every mobile row must fill the available width')
++        if (ratios.length === 2) assert.ok(ratios.every((ratio) => ratio < 1))
++      }
++      const singletonCount = counts.filter((count) => count === 1).length
++      assert.equal([...html.matchAll(/src="\/img\/medium"/g)].length, singletonCount)
++    }
++  }
++})
++
++test('mobile mixed sequences preserve all photos, order, aspect ratio and filled rows', () => {
++  const sets = [[], [{}, { width: 10, height: 0 }, { width: -1, height: 3 }],
++    ...Array.from({ length: 24 }, (_, n) => photos(Array.from({ length: n + 1 }, (_, i) => [0.4, 0.667, 0.75, 1, 1.5, 2, 8][i % 7])))]
++  for (const width of [280, 319, 355, 390, 640]) {
++    for (const items of sets) {
++      let next = 0
++      for (const row of mobileRows(items, width, 8)) {
++        assert.equal(row.start, next)
++        assert.ok(row.height > 0)
++        const ratios = items.slice(row.start, row.end).map(aspectOf)
++        assert.ok(Math.abs(ratios.reduce((sum, ratio) => sum + ratio * row.height, 0) + 8 * (ratios.length - 1) - width) < 1e-8)
++        next = row.end
++      }
++      assert.equal(next, items.length)
++    }
++  }
++  assert.equal(mobileRows(photos([0.75]), 0, 8).length, 0)
++})

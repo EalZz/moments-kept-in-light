@@ -1,0 +1,2 @@
+# Unified patches contain context lines consisting of a single space.
+updates/modules/*/update.patch -whitespace

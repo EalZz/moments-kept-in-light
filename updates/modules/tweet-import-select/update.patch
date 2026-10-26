@@ -1,0 +1,476 @@
+diff --git a/public/admin.js b/public/admin.js
+--- a/public/admin.js
++++ b/public/admin.js
+@@ -638,7 +638,7 @@
+       <input type="file" class="fileInput" accept="image/*" multiple hidden />
+       <div class="row" style="margin-top:10px">
+         <input class="tweetUrl" placeholder="트윗 URL 붙여넣기 (예: https://x.com/…/status/…)" />
+-        <button class="tweetBtn" style="white-space:nowrap">트윗에서 가져오기</button>
++        <button class="tweetBtn" style="white-space:nowrap">트윗 정보 확인</button>
+       </div>
+       <div class="upload-status"></div>
+       <div class="admin-grid">
+@@ -987,7 +987,7 @@
+     })
+ 
+     sec.querySelector('.tweetBtn').addEventListener('click', () =>
+-      importTweet(id, gid, sec.querySelector('.tweetUrl').value.trim(), status))
++      importTweet(id, gid, sec.querySelector('.tweetUrl').value.trim(), status, col))
+ 
+     // 사진 드래그 정렬 (같은 섹션 안에서)
+     let dragged = null
+@@ -1891,57 +1891,140 @@
+ }
+ 
+ // ---------- tweet import ----------
+-// 고정 템플릿 파싱: "{장르} - {캐릭터}" 줄과 "Model::{이름} 님 (@{계정})" 줄들
++// 고정 템플릿의 작품/캐릭터와 모델 정보를 분리해 선택적으로 반영합니다.
+ function parseTweetInfo(text) {
+   const models = []
+   const modelRe = /Model::\s*([^\n(]+?)\s*(?:님)?\s*\(\s*@?\s*([A-Za-z0-9_]+)\s*\)?/g
+   let m
+   while ((m = modelRe.exec(text))) models.push({ name: m[1].trim(), handle: m[2] })
+-  let character = ''
++  let series = '', character = ''
+   for (const line of text.split('\n')) {
+     const t = line.trim()
+     if (!t || t.startsWith('[') || t.startsWith('#') || /^Model::/i.test(t)) continue
+-    if (/\s[-–—]\s/.test(t)) { character = t; break }
+-  }
+-  return { models, character }
+-}
+-
+-async function importTweet(collectionId, groupId, url, status) {
+-  if (!url) return alert('트윗 URL을 입력하세요')
+-  status.textContent = '트윗 정보 가져오는 중…'
+-  try {
+-    const { photos, text } = await api('/tweet-media?url=' + encodeURIComponent(url))
+-
+-    // 템플릿에서 모델/캐릭터 정보 추출 → 확인 후 자동 등록
+-    const info = parseTweetInfo(text || '')
+-    // 이름-핸들 쌍을 모델 이름 사전에 자동 저장 (이미 등록된 이름은 유지)
+-    for (const mo of info.models) {
+-      api('/model-names', { method: 'PUT', json: { handle: mo.handle, name: mo.name + ' 님', auto: true } }).catch(() => {})
+-    }
+-    let targetGroup = groupId
+-    if (info.models.length || info.character) {
+-      const patch = {}
+-      if (info.models.length) patch.twitter = info.models.map((x) => x.handle).join(', ')
+-      if (info.character) patch.character = info.character
+-      const desc = [
+-        info.character ? '캐릭터: ' + info.character : '',
+-        ...info.models.map((x) => '모델: ' + x.name + ' 님 (@' + x.handle + ')'),
+-      ].filter(Boolean).join('\n')
+-
+-      if (groupId) {
+-        if (confirm('트윗에서 정보를 찾았습니다:\n' + desc + '\n\n이 폴더의 모델 계정/캐릭터로 등록할까요?')) {
+-          await api('/groups/' + groupId, { method: 'PATCH', json: patch })
+-        }
+-      } else {
+-        if (confirm('트윗에서 정보를 찾았습니다:\n' + desc + '\n\n이 모델의 폴더를 만들어서 사진을 넣고 계정/캐릭터까지 등록할까요?\n(취소하면 행사 바로 아래에 사진만 올라갑니다)')) {
+-          const name = info.models.map((x) => x.name + ' 님').join(', ') || info.character
+-          const created = await api(`/collections/${collectionId}/groups`, { method: 'POST', json: { name } })
+-          await api('/groups/' + created.id, { method: 'PATCH', json: patch })
+-          targetGroup = created.id
+-        }
++    const parts = t.split(/\s+[-–—]\s+/)
++    if (parts.length >= 2) {
++      series = parts[0].replace(/\s+/g, ' ').replace(/\s*:\s*/g, ': ').trim()
++      character = parts.slice(1).join(' - ').trim()
++      break
++    }
++  }
++  return { models, series, character }
++}
++
++function tweetImportFields(info, photos) {
++  return [
++    { key: 'nickname', label: '닉네임', value: info.models.map((m) => m.name).join(', '), checked: false },
++    { key: 'account', label: '계정', value: info.models.map((m) => '@' + m.handle).join(', '), checked: true },
++    { key: 'series', label: '장르(작품)', value: info.series, checked: true },
++    { key: 'character', label: '캐릭터', value: info.character, checked: true },
++    { key: 'photos', label: '사진', value: photos.length ? photos.length + '장' : '', checked: false },
++  ]
++}
++
++function chooseTweetImport(info, photos, url, group) {
++  return new Promise((resolve) => {
++    const fields = tweetImportFields(info, photos)
++    const suggestedName = info.models.map((m) => '@' + m.handle).join(', ') || '트윗 가져오기'
++    const { overlay, close } = createAdminDialog('트윗에서 가져오기', `
++      <p class="tweet-intro">가져올 정보를 선택해 주세요.</p>
++      <div class="tweet-source"><span>트윗 링크</span><span class="tweet-source-url">${esc(url)}</span></div>
++      <div class="tweet-destination">
++        ${group ? `<span>반영 위치</span><strong>${esc(group.name)} 폴더</strong>` : `
++          <label><input type="checkbox" class="tweet-create" checked /> 새 폴더 만들기</label>
++          <label class="tweet-folder-label">새 폴더 이름<input class="tweet-folder-name" value="${esc(suggestedName)}" /></label>
++          <div class="field-hint">해제하면 사진만 행사 바로 아래에 가져옵니다.</div>`}
++      </div>
++      <div class="tweet-fields">${fields.map((f) => `
++        <label class="tweet-field ${f.value ? '' : 'unavailable'}">
++          <input type="checkbox" data-tweet-field="${f.key}" ${f.value && f.checked ? 'checked' : ''} ${f.value ? '' : 'disabled'} />
++          <span>${f.label}</span><span class="tweet-value">${esc(f.value || '추출되지 않음')}</span>
++        </label>${f.key === 'photos' && photos.length ? `<div class="tweet-thumbs">${photos.map((p) => `<img src="/api/fetch-image?url=${encodeURIComponent(p.url.replace(/([?&])name=[^&]*/, '$1name=small'))}" alt="트윗 사진 미리보기" loading="lazy" />`).join('')}</div>` : ''}`).join('')}
++      </div>
++      <p class="field-hint">체크하지 않은 정보는 기존 값을 유지합니다. 사진은 체크한 경우에만 업로드합니다.</p>
++      <div class="tweet-import-error" role="alert"></div>
++      <div class="dialog-actions tweet-actions"><span class="tweet-selection-count" aria-live="polite"></span><button type="button" class="tweet-cancel">취소</button><button type="button" class="tweet-apply primary">선택한 정보 가져오기</button></div>
++    `)
++    overlay.classList.add('tweet-import-dialog')
++    overlay.setAttribute('role', 'dialog')
++    overlay.setAttribute('aria-modal', 'true')
++    overlay.setAttribute('aria-label', '트윗에서 가져오기')
++    const boxes = [...overlay.querySelectorAll('[data-tweet-field]')]
++    const create = overlay.querySelector('.tweet-create')
++    const folderInput = overlay.querySelector('.tweet-folder-name')
++    const apply = overlay.querySelector('.tweet-apply')
++    const error = overlay.querySelector('.tweet-import-error')
++    let settled = false
++    const finish = (value) => {
++      if (settled) return
++      settled = true
++      observer.disconnect()
++      close()
++      resolve(value)
++    }
++    // 기존 공통 닫기 버튼·Escape·배경 클릭도 반드시 취소로 종료합니다.
++    const observer = new MutationObserver(() => {
++      if (!overlay.isConnected) finish(null)
++    })
++    observer.observe(document.body, { childList: true })
++    const update = () => {
++      const needsGroup = !!group || create.checked
++      boxes.forEach((box) => {
++        const field = fields.find((f) => f.key === box.dataset.tweetField)
++        box.disabled = !field.value || (!needsGroup && field.key !== 'photos')
++      })
++      if (folderInput) folderInput.disabled = !create.checked
++      const count = boxes.filter((box) => box.checked && !box.disabled).length
++      overlay.querySelector('.tweet-selection-count').textContent = count + '개 항목 선택'
++      apply.disabled = count === 0 || (!!create?.checked && !folderInput.value.trim())
++      error.textContent = ''
++    }
++    boxes.forEach((box) => box.addEventListener('change', update))
++    create?.addEventListener('change', update)
++    folderInput?.addEventListener('input', update)
++    overlay.querySelector('.tweet-cancel').addEventListener('click', () => finish(null))
++    apply.addEventListener('click', () => {
++      if (apply.disabled) return
++      const selected = Object.fromEntries(boxes.map((box) => [box.dataset.tweetField, box.checked && !box.disabled]))
++      finish({ selected, createGroup: !!create?.checked, folderName: folderInput?.value.trim() || '' })
++    })
++    update()
++    overlay.querySelector('.dialogClose').focus()
++  })
++}
++
++async function applyTweetImport(collectionId, group, info, photos, choice, status) {
++  const { selected } = choice
++  let targetGroup = group?.id || null
++  const patch = {}
++  if (selected.account) patch.twitter = info.models.map((m) => m.handle).join(', ')
++  if (selected.series) patch.series = [info.series]
++  if (selected.character) {
++    patch.character = info.character
++    // 작품을 선택하지 않았다면 기존 유도값도 명시적으로 보존합니다.
++    if (!selected.series) patch.series = group?.series || []
++  }
++  if (selected.nickname) {
++    const handles = selected.account ? info.models.map((m) => m.handle) : [].concat(group?.meta?.twitter || [])
++    const memberNames = { ...(group?.meta?.member_names || {}) }
++    for (const model of info.models) {
++      if (handles.some((handle) => handle.toLowerCase() === model.handle.toLowerCase())) {
++        memberNames[model.handle.toLowerCase()] = model.name
+       }
+     }
+-    let done = 0
++    if (Object.keys(memberNames).length) patch.member_names = memberNames
++    for (const model of info.models) {
++      await api('/model-names', { method: 'PUT', json: { handle: model.handle, name: model.name, auto: true } })
++    }
++  }
++  if (!targetGroup && choice.createGroup) {
++    const created = await api(`/collections/${collectionId}/groups`, { method: 'POST', json: { name: choice.folderName } })
++    targetGroup = created.id
++  }
++  if (targetGroup && Object.keys(patch).length) {
++    await api('/groups/' + targetGroup, { method: 'PATCH', json: patch })
++  }
++  let done = 0
++  if (selected.photos) {
+     for (const p of photos) {
+       status.textContent = `트윗 사진 다운로드/업로드 중… ${done + 1} / ${photos.length}`
+       const res = await fetch('/api/fetch-image?url=' + encodeURIComponent(p.url))
+@@ -1951,10 +2034,35 @@
+       await uploadOne(collectionId, targetGroup, file)
+       done++
+     }
+-    status.textContent = `완료: 트윗에서 ${done}장 가져옴`
+-    renderCollection(collectionId)
++  }
++  const labels = { nickname: '닉네임', account: '계정', series: '장르', character: '캐릭터' }
++  const imported = Object.entries(labels).filter(([key]) => selected[key]).map(([, label]) => label)
++  if (selected.photos) imported.push('사진 ' + done + '장')
++  status.textContent = '완료: ' + imported.join(' · ') + ' 가져옴'
++}
++
++async function importTweet(collectionId, groupId, url, status, collection) {
++  if (!url) return alert('트윗 URL을 입력하세요')
++  if (status.dataset?.tweetBusy) return
++  if (status.dataset) status.dataset.tweetBusy = '1'
++  status.textContent = '트윗 정보 확인 중…'
++  try {
++    const { photos = [], text = '' } = await api('/tweet-media?url=' + encodeURIComponent(url))
++    const info = parseTweetInfo(text)
++    const col = collection || await api('/collections/' + collectionId)
++    const group = groupId ? col.groups.find((g) => String(g.id) === String(groupId)) : null
++    if (groupId && !group) throw new Error('반영할 폴더를 찾지 못했습니다. 화면을 새로고침해 주세요.')
++    const choice = await chooseTweetImport(info, photos, url, group)
++    if (!choice) { status.textContent = '가져오기를 취소했습니다.'; return }
++    await applyTweetImport(collectionId, group, info, photos, choice, status)
++    const message = status.textContent
++    await renderCollection(collectionId)
++    const section = document.querySelector(`.section[data-gid="${groupId || ''}"]`)
++    if (section) section.querySelector('.upload-status').textContent = message
+   } catch (e) {
+     status.textContent = '실패: ' + e.message
++  } finally {
++    if (status.dataset) delete status.dataset.tweetBusy
+   }
+ }
+ 
+diff --git a/public/admin.html b/public/admin.html
+--- a/public/admin.html
++++ b/public/admin.html
+@@ -131,6 +131,38 @@
+     .trash-item .t { flex: 1; min-width: 0; }
+     .trash-item .title { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+     .trash-item .info { color: var(--fg-faint); font-size: 11px; }
++    .tweet-import-dialog .inner { max-width: 720px !important; }
++    .tweet-import-dialog .tweet-intro { margin: 0 0 20px; color: var(--fg-dim); font-size: 13px; }
++    .tweet-source, .tweet-destination { padding: 13px 14px; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 14px; font-size: 12px; }
++    .tweet-source { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 10px; }
++    .tweet-source-url { overflow-wrap: anywhere; color: var(--fg-dim); }
++    .tweet-destination > strong { margin-left: 24px; font-weight: 500; }
++    .tweet-destination label { display: flex; align-items: center; gap: 9px; }
++    .tweet-folder-label { margin-top: 14px; flex-wrap: wrap; }
++    .tweet-folder-name { width: 100%; margin-bottom: 8px; }
++    .tweet-fields { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; margin: 18px 0 14px; }
++    .tweet-field { display: grid; grid-template-columns: 20px 100px minmax(0, 1fr); align-items: center; gap: 14px; padding: 15px 16px; border-bottom: 1px solid var(--border); font-size: 13px; cursor: pointer; }
++    .tweet-field:has(input:checked:not(:disabled)) { background: rgba(255,255,255,.06); }
++    .tweet-field.unavailable, .tweet-field:has(input:disabled) { opacity: .45; cursor: default; }
++    .tweet-field input, .tweet-destination input[type=checkbox] { width: 18px; height: 18px; margin: 0; padding: 0; accent-color: #e5e5e5; }
++    .tweet-value { color: var(--fg-dim); overflow-wrap: anywhere; }
++    .tweet-thumbs { display: flex; gap: 8px; padding: 12px 16px 16px 50px; overflow-x: auto; }
++    .tweet-thumbs img { width: 92px; height: 92px; object-fit: cover; border-radius: 4px; background: var(--bg); }
++    .tweet-actions { align-items: center; border-top: 1px solid var(--border); padding-top: 20px; }
++    .tweet-selection-count { margin-right: auto; font-size: 12px; color: var(--fg-dim); }
++    .tweet-import-error { color: #e07070; font-size: 12px; }
++    .tweet-apply.primary { background: var(--fg); color: var(--bg); }
++    .tweet-apply:disabled { opacity: .4; cursor: default; }
++    @media (max-width: 520px) {
++      .tweet-import-dialog .inner { padding: 20px 12px 40px; }
++      .tweet-import-dialog .panel { padding: 16px; }
++      .tweet-field { grid-template-columns: 18px 76px minmax(0, 1fr); gap: 9px; padding: 14px 10px; font-size: 12px; }
++      .tweet-source { grid-template-columns: 1fr; gap: 7px; }
++      .tweet-thumbs { padding-left: 37px; }
++      .tweet-thumbs img { width: 70px; height: 70px; }
++      .tweet-actions { flex-wrap: wrap; }
++      .tweet-selection-count { width: 100%; }
++    }
+     .admin-dialog .inner { max-width: 560px; }
+     .admin-dialog .form-field { display: grid; gap: 7px; margin-bottom: 16px; }
+     .admin-dialog .form-field label { font-size: 12px; color: var(--fg-dim); }
+@@ -194,6 +226,6 @@
+ <body>
+   <div class="admin-wrap" id="app"></div>
+   <script src="vendor/exifr.js"></script>
+-  <script src="admin.js"></script>
++  <script src="admin.js?v=20261026-tweet-select"></script>
+ </body>
+ </html>
+diff --git a/src/worker.js b/src/worker.js
+--- a/src/worker.js
++++ b/src/worker.js
+@@ -155,7 +155,7 @@
+ // 폴더 메타에서 작품 목록을 얻습니다. series가 아직 없는 예전 데이터는 캐릭터명에서 유도합니다.
+ export function seriesOf(meta) {
+   const stored = Array.isArray(meta?.series) ? meta.series.map(normalizeSeries).filter(Boolean) : []
+-  if (stored.length) return stored
++  if (Array.isArray(meta?.series)) return stored
+   const derived = splitCharacterLine(meta?.character).series
+   return derived ? [derived] : []
+ }
+@@ -1458,7 +1458,7 @@
+       .map((s) => normalizeSeries(String(s)))
+       .filter(Boolean)
+     const unique = [...new Set(list)]
+-    if (unique.length) meta.series = unique
++    if (unique.length || Array.isArray(body.series)) meta.series = unique
+     else delete meta.series
+   }
+   await c.env.DB.prepare('UPDATE groups SET name = ?, meta_json = ? WHERE id = ?')
+@@ -1830,7 +1830,6 @@
+     width: p.width,
+     height: p.height,
+   }))
+-  if (!photos.length) return c.json({ error: '이 트윗에는 사진이 없습니다' }, 404)
+   return c.json({ photos, text: data.tweet?.text || '' })
+ })
+ 
+diff --git a/test/tweet-import.node.mjs b/test/tweet-import.node.mjs
+new file mode 100644
+--- /dev/null
++++ b/test/tweet-import.node.mjs
+@@ -0,0 +1,86 @@
++import assert from 'node:assert/strict'
++import { readFileSync } from 'node:fs'
++import { runInNewContext } from 'node:vm'
++import { test } from 'node:test'
++
++const source = readFileSync(new URL('../public/admin.js', import.meta.url), 'utf8')
++const functions = source.slice(source.indexOf('function parseTweetInfo('), source.indexOf('// ---------- client-side resize'))
++const template = '원신 - 감우\nModel::라기짱 님 (@ragi)'
++function setup({ choice = { selected: { account: true, series: true, character: true } }, failSave = false, text = template } = {}) {
++  const calls = [], status = { textContent: '', dataset: {} }
++  const context = {
++    api: async (path, opts) => {
++      calls.push([path, opts])
++      if (path.startsWith('/tweet-media')) return { photos: [{ url: 'image' }], text }
++      if (path === '/model-names' && failSave) throw new Error('이름 저장 실패')
++      return { id: 42 }
++    },
++    fetch: async (url) => { calls.push(['fetch', url]); return { ok: true, blob: async () => ({ type: 'image/jpeg' }) } },
++    File: class {},
++    uploadOne: async (...args) => { calls.push(['upload', ...args]) },
++    renderCollection: async () => { calls.push(['render']) },
++    document: { querySelector: () => null },
++  }
++  const fn = runInNewContext(`${functions}\nchooseTweetImport = async () => choice;\n({ parseTweetInfo, tweetImportFields, importTweet, applyTweetImport })`, { ...context, choice })
++  const group = { id: 7, name: '기존 폴더', meta: { twitter: ['old'] }, series: ['기존 작품'] }
++  return { ...fn, calls, status, group, col: { groups: [group] } }
++}
++const plain = (v) => JSON.parse(JSON.stringify(v))
++test('parses nickname, account, series and character separately', () => {
++  const x = setup()
++  for (const name of ['라기짱 님', '라기짱님', '라기짱']) {
++    const info = x.parseTweetInfo(`승리의 여신 : 니케 - 크러스트\nModel::${name} (@ragi)`)
++    assert.deepEqual(plain(info), { models: [{ name: '라기짱', handle: 'ragi' }], series: '승리의 여신: 니케', character: '크러스트' })
++  }
++})
++test('only account, series and character are checked by default', () => {
++  const x = setup(), fields = x.tweetImportFields(x.parseTweetInfo(template), [{ url: 'a' }])
++  assert.deepEqual(plain(fields.filter((f) => f.checked).map((f) => f.key)), ['account', 'series', 'character'])
++  assert.equal(x.tweetImportFields(x.parseTweetInfo(''), []).filter((f) => f.value).length, 0)
++})
++test('default selection saves metadata without nickname or photos', async () => {
++  const x = setup()
++  await x.importTweet(1, 7, 'tweet', x.status, x.col)
++  assert.deepEqual(plain(x.calls.find(([p]) => p === '/groups/7')[1].json), { twitter: 'ragi', series: ['원신'], character: '감우' })
++  assert.ok(!x.calls.some(([p]) => ['upload', 'fetch', '/model-names'].includes(p)))
++  assert.equal(x.status.dataset.tweetBusy, undefined)
++})
++test('cancel performs no writes or image transfers', async () => {
++  const x = setup({ choice: null })
++  await x.importTweet(1, 7, 'tweet', x.status, x.col)
++  assert.equal(x.calls.filter(([, opts]) => opts?.method).length, 0)
++  assert.ok(!x.calls.some(([p]) => ['upload', 'fetch', 'render'].includes(p)))
++})
++test('character-only preserves existing derived series and account', async () => {
++  const x = setup({ choice: { selected: { character: true } } })
++  await x.importTweet(1, 7, 'tweet', x.status, x.col)
++  assert.deepEqual(plain(x.calls.find(([p]) => p === '/groups/7')[1].json), { character: '감우', series: ['기존 작품'] })
++})
++test('series-only does not change character', async () => {
++  const x = setup({ choice: { selected: { series: true } } })
++  await x.importTweet(1, 7, 'tweet', x.status, x.col)
++  assert.deepEqual(plain(x.calls.find(([p]) => p === '/groups/7')[1].json), { series: ['원신'] })
++})
++test('photos-only uploads without metadata or nickname writes', async () => {
++  const x = setup({ choice: { selected: { photos: true } } })
++  await x.importTweet(1, 7, 'tweet', x.status, x.col)
++  assert.equal(x.calls.filter(([p]) => p === 'upload').length, 1)
++  assert.equal(x.calls.filter(([, opts]) => opts?.method).length, 0)
++})
++test('new folder uses explicitly reviewed name instead of unchecked nickname', async () => {
++  const x = setup({ choice: { selected: { account: true }, createGroup: true, folderName: '@ragi' } })
++  await x.importTweet(1, null, 'tweet', x.status, x.col)
++  assert.deepEqual(plain(x.calls.find(([p]) => p === '/collections/1/groups')[1].json), { name: '@ragi' })
++  assert.ok(!x.calls.some(([p]) => p === '/model-names'))
++})
++test('selected nickname save failure stops later changes', async () => {
++  const x = setup({ choice: { selected: { nickname: true, photos: true } }, failSave: true })
++  await x.importTweet(1, 7, 'tweet', x.status, x.col)
++  assert.match(x.status.textContent, /^실패:/)
++  assert.ok(!x.calls.some(([p]) => p === 'upload' || p === '/groups/7'))
++})
++test('busy section ignores repeated import requests', async () => {
++  const x = setup(); x.status.dataset.tweetBusy = '1'
++  await x.importTweet(1, 7, 'tweet', x.status, x.col)
++  assert.equal(x.calls.length, 0)
++})
+diff --git a/test/tweet-import.worker.test.js b/test/tweet-import.worker.test.js
+new file mode 100644
+--- /dev/null
++++ b/test/tweet-import.worker.test.js
+@@ -0,0 +1,60 @@
++import { describe, expect, it, vi } from 'vitest'
++import { env, SELF } from 'cloudflare:test'
++import worker from '../src/worker.js'
++
++async function login(password = 'test-password') {
++  const response = await SELF.fetch('https://example.com/api/login', {
++    method: 'POST',
++    headers: { 'Content-Type': 'application/json' },
++    body: JSON.stringify({ password }),
++  })
++  return { response, cookie: response.headers.get('set-cookie')?.split(';')[0] }
++}
++
++async function seedCollection({ title, published = 1, deletedAt = null, shootType = 'event', locationType = '', relatedEventId = null } = {}) {
++  const result = await env.DB.prepare(
++    `INSERT INTO collections
++       (title, description, published, deleted_at, shoot_type, location_type, related_event_id)
++     VALUES (?, ?, ?, ?, ?, ?, ?)`
++  ).bind(title || 'Collection', 'Description', published, deletedAt, shootType, locationType, relatedEventId).run()
++  return result.meta.last_row_id
++}
++
++// 선택하지 않은 작품이 캐릭터명에서 새로 유도되지 않게 빈 배열을 보존합니다.
++describe('tweet import independent fields', () => {
++  it('preserves explicit no-series when importing only character', async () => {
++    const collectionId = await seedCollection()
++    const { meta } = await env.DB.prepare("INSERT INTO groups (collection_id, name) VALUES (?, '기존 이름')").bind(collectionId).run()
++    const { cookie } = await login()
++    const response = await SELF.fetch(`https://example.com/api/groups/${meta.last_row_id}`, {
++      method: 'PATCH', headers: { cookie, 'Content-Type': 'application/json' },
++      body: JSON.stringify({ character: '감우', series: [] }),
++    })
++    expect(response.status).toBe(200)
++    const detail = await SELF.fetch(`https://example.com/api/collections/${collectionId}`, { headers: { cookie } })
++    const group = (await detail.json()).groups[0]
++    expect(group.name).toBe('기존 이름')
++    expect(group.meta.character).toBe('감우')
++    expect(group.meta.series).toEqual([])
++    expect(group.series).toEqual([])
++  })
++})
++
++
++describe('tweet metadata without photos', () => {
++  it('returns text instead of rejecting a text-only tweet', async () => {
++    const { cookie } = await login()
++    const upstream = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({
++      tweet: { text: '원신 - 감우\nModel::라기짱 (@ragi)' },
++    }))
++    try {
++      const request = new Request('https://example.com/api/tweet-media?url=https://x.com/example/status/1234567890', { headers: { cookie } })
++      const response = await worker.fetch(request, env, {})
++      expect(response.status).toBe(200)
++      expect(await response.json()).toEqual({ photos: [], text: '원신 - 감우\nModel::라기짱 (@ragi)' })
++      expect(upstream).toHaveBeenCalledWith('https://api.fxtwitter.com/status/1234567890', expect.any(Object))
++    } finally {
++      upstream.mockRestore()
++    }
++  })
++})

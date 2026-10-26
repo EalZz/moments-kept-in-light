@@ -1,0 +1,681 @@
+diff --git a/public/admin.js b/public/admin.js
+--- a/public/admin.js
++++ b/public/admin.js
+@@ -36,9 +36,64 @@
+   return {
+     name: String(raw.name || '').trim(),
+     twitter: list(raw.twitter).map((handle) => handle.replace(/^@/, '')).filter(Boolean),
++    member_names: normalizeMemberNameMap(raw.member_names),
+     character: String(raw.character || '').trim(),
+     series: list(raw.series, /[,\n]+/),
+   }
++}
++
++function normalizeMemberNameMap(value) {
++  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
++  return Object.fromEntries(Object.entries(value).map(([handle, name]) => [
++    String(handle).trim().replace(/^@/, '').toLowerCase(),
++    String(name || '').trim(),
++  ]).filter(([handle, name]) => handle && name))
++}
++
++function modelHandlesFromInput(value) {
++  return String(value || '').split(/[\s,]+/).map((handle) => handle.trim().replace(/^@/, '')).filter(Boolean)
++}
++
++function splitJoinedModelName(name, count) {
++  const label = String(name || '').trim()
++  if (!label) return []
++  if (count === 1) return [label]
++  const parts = label.split(/\s*&\s*/).map((part) => part.trim()).filter(Boolean)
++  return parts.length === count ? parts : []
++}
++
++function readMemberNameInputs(container) {
++  const names = {}
++  container.querySelectorAll('[data-member-handle]').forEach((input) => {
++    names[input.dataset.memberHandle] = input.value.trim()
++  })
++  return names
++}
++
++function mountMemberNameEditor(container, handlesInput, labelInput, savedNames = {}) {
++  const initialNames = normalizeMemberNameMap(savedNames)
++  const render = () => {
++    const currentNames = readMemberNameInputs(container)
++    const handles = modelHandlesFromInput(handlesInput.value)
++    const suggestions = splitJoinedModelName(labelInput.value, handles.length)
++    container.innerHTML = handles.length
++      ? `<div class="model-name-rows">${handles.map((handle, index) => {
++        const key = handle.toLowerCase()
++        const name = Object.prototype.hasOwnProperty.call(currentNames, key)
++          ? currentNames[key]
++          : initialNames[key] || ''
++        const placeholder = suggestions[index] ? `자동 저장: ${suggestions[index]}` : '표시 이름 입력'
++        return `<label class="model-name-row"><span>@${esc(handle)}</span><input data-member-handle="${esc(key)}" value="${esc(name)}" placeholder="${esc(placeholder)}" /></label>`
++      }).join('')}</div>`
++      : '<div class="field-hint">계정을 입력하면 계정별 표시 이름을 설정할 수 있습니다.</div>'
++  }
++  handlesInput.addEventListener('input', render)
++  labelInput.addEventListener('input', render)
++  render()
++}
++
++function savedMemberNameInputs(container) {
++  return Object.fromEntries(Object.entries(readMemberNameInputs(container)).filter(([, name]) => name))
+ }
+ 
+ async function api(path, opts = {}) {
+@@ -297,8 +352,13 @@
+       </div>
+       <div id="newSessionModelFields" class="session-model-fields" hidden>
+         <div class="row">
+-          <input id="newSessionModelName" placeholder="모델명 (예: 메쨩님)" />
++          <input id="newSessionModelName" placeholder="세션·모델명 (예: 메쨩 &amp; 하정)" />
+           <input id="newSessionModelHandles" placeholder="모델 X 계정 (예: aaa, bbb)" />
++        </div>
++        <div class="form-field">
++          <label>사람별 표시 이름</label>
++          <div id="newSessionMemberNames"></div>
++          <div class="field-hint">계정별로 저장합니다. 비워두면 세션명에서 계정 수와 '&amp;' 구분 수가 맞을 때만 자동으로 나눕니다.</div>
+         </div>
+         <div class="row">
+           <input id="newSessionModelCharacter" placeholder="캐릭터명 (선택)" />
+@@ -439,6 +499,7 @@
+         session_model: shootType === 'session' ? {
+           name: document.getElementById('newSessionModelName').value.trim(),
+           twitter: document.getElementById('newSessionModelHandles').value.trim(),
++          member_names: savedMemberNameInputs(document.getElementById('newSessionMemberNames')),
+           character: document.getElementById('newSessionModelCharacter').value.trim(),
+           series: document.getElementById('newSessionModelSeries').value.trim(),
+         } : null,
+@@ -485,6 +546,11 @@
+   const newType = document.getElementById('newShootType')
+   const relatedEvent = document.getElementById('newRelatedEvent')
+   const newSessionModelFields = document.getElementById('newSessionModelFields')
++  mountMemberNameEditor(
++    document.getElementById('newSessionMemberNames'),
++    document.getElementById('newSessionModelHandles'),
++    document.getElementById('newSessionModelName')
++  )
+   const syncNewRelation = () => {
+     const enabled = newType.value === 'session'
+     relatedEvent.disabled = !enabled
+@@ -635,6 +701,11 @@
+             <input id="editSessionModelHandles" value="${esc(sessionModel.twitter.join(', '))}" placeholder="@ 없이 입력, 여러 명이면 쉼표로 구분" />
+           </div>
+           <div class="form-field">
++            <label>사람별 표시 이름</label>
++            <div id="editSessionMemberNames"></div>
++            <div class="field-hint">계정별로 저장합니다. 비워두면 세션명에서 계정 수와 '&amp;' 구분 수가 맞을 때만 자동으로 나눕니다.</div>
++          </div>
++          <div class="form-field">
+             <label for="editSessionModelCharacter">캐릭터명</label>
+             <input id="editSessionModelCharacter" value="${esc(sessionModel.character)}" placeholder="예: 체인소 맨 - 레제 &amp; 덴지" />
+           </div>
+@@ -663,6 +734,12 @@
+   const type = overlay.querySelector('#editColType')
+   const related = overlay.querySelector('#editColRelated')
+   const sessionModelFields = overlay.querySelector('#editSessionModelFields')
++  mountMemberNameEditor(
++    overlay.querySelector('#editSessionMemberNames'),
++    overlay.querySelector('#editSessionModelHandles'),
++    overlay.querySelector('#editSessionModelName'),
++    sessionModel.member_names
++  )
+   const syncTypeFields = () => {
+     const enabled = type.value === 'session'
+     related.disabled = !enabled
+@@ -689,6 +766,7 @@
+           session_model: type.value === 'session' ? {
+             name: overlay.querySelector('#editSessionModelName').value.trim(),
+             twitter: overlay.querySelector('#editSessionModelHandles').value.trim(),
++            member_names: savedMemberNameInputs(overlay.querySelector('#editSessionMemberNames')),
+             character: overlay.querySelector('#editSessionModelCharacter').value.trim(),
+             series: overlay.querySelector('#editSessionModelSeries').value.trim(),
+           } : null,
+@@ -728,6 +806,7 @@
+ 
+ function openGroupEditor(group, onSaved) {
+   const currentHandles = [].concat((group.meta && group.meta.twitter) || []).join(', ')
++  const currentMemberNames = normalizeMemberNameMap(group.meta && group.meta.member_names)
+   const currentCharacter = (group.meta && group.meta.character) || ''
+   // 직접 저장한 작품만 입력칸에 채웁니다. 유도값(group.series)을 채워두면 그대로 저장돼
+   // 캐릭터명을 나중에 고쳐도 옛 값이 남습니다. 유도값은 placeholder로만 보여줍니다.
+@@ -744,6 +823,11 @@
+       <div class="field-hint">@ 없이 입력하고, 여러 명이면 쉼표로 구분합니다. 비우면 계정 연결이 삭제됩니다.</div>
+     </div>
+     <div class="form-field">
++      <label>사람별 표시 이름</label>
++      <div id="groupMemberNames"></div>
++      <div class="field-hint">계정별로 저장합니다. 비워두면 폴더명에서 계정 수와 '&amp;' 구분 수가 맞을 때만 자동으로 나눕니다.</div>
++    </div>
++    <div class="form-field">
+       <label for="creditCharacter">캐릭터명</label>
+       <input id="creditCharacter" value="${esc(currentCharacter)}" placeholder="예: 붕괴: 스타레일 - 연희" />
+       <div class="field-hint">비우면 갤러리에 캐릭터명이 표시되지 않습니다.</div>
+@@ -754,6 +838,12 @@
+       <div class="field-hint">${derivedSeries && !currentSeries ? `비워두면 캐릭터명에서 <b>${esc(derivedSeries)}</b>로 자동 지정됩니다. ` : ''}여러 곳에 걸친 캐릭터는 쉼표로 구분해 둘 다 넣을 수 있습니다 (예: 보컬로이드, 카루네 시에).</div>
+     </div>
+     <div class="dialog-actions"><button type="button" class="dialogCancel">취소</button><button type="button" class="primary dialogSave">저장</button></div>`)
++  mountMemberNameEditor(
++    overlay.querySelector('#groupMemberNames'),
++    overlay.querySelector('#creditHandles'),
++    overlay.querySelector('#groupName'),
++    currentMemberNames
++  )
+   overlay.querySelector('.dialogCancel').addEventListener('click', close)
+   overlay.querySelector('.dialogSave').addEventListener('click', async () => {
+     const button = overlay.querySelector('.dialogSave')
+@@ -769,6 +859,7 @@
+         json: {
+           name,
+           twitter: overlay.querySelector('#creditHandles').value.trim(),
++          member_names: savedMemberNameInputs(overlay.querySelector('#groupMemberNames')),
+           character: overlay.querySelector('#creditCharacter').value.trim(),
+           series: overlay.querySelector('#creditSeries').value.trim(),
+         },
+diff --git a/public/admin.html b/public/admin.html
+--- a/public/admin.html
++++ b/public/admin.html
+@@ -34,6 +34,11 @@
+     .session-model-fields .form-field { margin-bottom: 12px; }
+     .session-model-fields .form-field:last-of-type { margin-bottom: 8px; }
+     .session-model-fields .form-field label { display: block; margin-bottom: 6px; color: var(--fg-dim); font-size: 11px; }
++    .model-name-rows { display: grid; gap: 7px; margin: 8px 0; }
++    .model-name-row { display: grid; grid-template-columns: minmax(110px, 0.8fr) minmax(0, 1.5fr); align-items: center; gap: 8px; }
++    .model-name-row span { color: var(--fg-faint); font: 11px ui-monospace, monospace; }
++    .model-name-row input { width: 100%; min-width: 0; }
++    .session-model-fields .form-field label.model-name-row { display: grid; margin: 0; color: var(--fg); font-size: inherit; }
+     .collection-type-panel .sec-head { margin-bottom: 4px; }
+     .collection-type-panel + .collection-type-panel { margin-top: 24px; }
+     .dropzone { border: 2px dashed var(--border); border-radius: 8px; padding: 48px 24px; text-align: center; color: var(--fg-faint); font-size: 13px; letter-spacing: 0.05em; cursor: pointer; transition: border-color .2s, color .2s; }
+diff --git a/src/worker.js b/src/worker.js
+--- a/src/worker.js
++++ b/src/worker.js
+@@ -54,7 +54,7 @@
+   return values.map((item) => String(item || '').trim()).filter(Boolean)
+ }
+ 
+-function normalizeSessionModel(value) {
++function normalizeSessionModel(value, { deriveMemberNames = false } = {}) {
+   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+   const model = {
+     name: String(value.name || '').trim(),
+@@ -62,6 +62,12 @@
+     character: String(value.character || '').trim(),
+     series: listMetaValues(value.series, /[,\n]+/).map(normalizeSeries).filter(Boolean),
+   }
++  const memberNames = normalizeMemberNames(
++    value.member_names,
++    model.twitter,
++    deriveMemberNames ? model.name : ''
++  )
++  if (Object.keys(memberNames).length) model.member_names = memberNames
+   return model.name || model.twitter.length || model.character || model.series.length ? model : null
+ }
+ 
+@@ -69,11 +75,61 @@
+   return normalizeSessionModel(meta?.session_model)
+ }
+ 
++function splitJoinedModelName(name, count) {
++  const label = String(name || '').trim()
++  if (!label) return []
++  if (count === 1) return [label]
++  const parts = label.split(/\s*&\s*/).map((part) => part.trim()).filter(Boolean)
++  return parts.length === count ? parts : []
++}
++
++function normalizeMemberNames(value, handles, fallbackLabel = '') {
++  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
++  const byHandle = Object.fromEntries(Object.entries(source).map(([handle, name]) => [
++    String(handle).trim().replace(/^@/, '').toLowerCase(),
++    String(name || '').trim(),
++  ]))
++  const fallbackParts = splitJoinedModelName(fallbackLabel, handles.length)
++  const result = {}
++  handles.forEach((handle, index) => {
++    const key = String(handle).trim().replace(/^@/, '').toLowerCase()
++    const name = byHandle[key] || fallbackParts[index] || ''
++    if (key && name) result[key] = name
++  })
++  return result
++}
++
++function resolvedModelNames(name, handles, modelNames, memberNames = {}) {
++  const parts = splitJoinedModelName(name, handles.length)
++  const scopedNames = normalizeMemberNames(memberNames, handles)
++  return handles.map((handle, index) => {
++    const key = String(handle).trim().replace(/^@/, '').toLowerCase()
++    return scopedNames[key] || modelNames[key] || parts[index] || ''
++  })
++}
++
+ function resolvedSessionModelNames(model, handles, modelNames) {
+-  const parts = String(model?.name || '').split('&').map((part) => part.trim()).filter(Boolean)
+-  return handles.map((handle, index) =>
+-    modelNames[handle.toLowerCase()] || (handles.length === 1 ? model?.name || '' : parts[index] || '')
+-  )
++  const label = String(model?.name || '').trim()
++  const parts = splitJoinedModelName(label, handles.length)
++  if (!handles.length) return label ? [label] : []
++  const memberNames = normalizeMemberNames(model?.member_names, handles)
++  const names = handles.map((handle, index) => {
++    const key = String(handle).trim().replace(/^@/, '').toLowerCase()
++    return memberNames[key] || modelNames[key] || parts[index] || ''
++  })
++  return names
++}
++
++function addResolvedSessionMemberNames(model, modelNames) {
++  if (!model?.twitter.length) return model
++  const resolved = resolvedModelNames(model.name, model.twitter, modelNames, model.member_names)
++  const memberNames = { ...(model.member_names || {}) }
++  model.twitter.forEach((handle, index) => {
++    const key = handle.toLowerCase()
++    if (!memberNames[key] && resolved[index]) memberNames[key] = resolved[index]
++  })
++  if (Object.keys(memberNames).length) model.member_names = memberNames
++  return model
+ }
+ 
+ // 작품명 표기 통일. 같은 작품이 공백 차이로 갈라지지 않게 합니다.
+@@ -324,8 +380,15 @@
+   ).all()
+   const groupOrderByCol = {}
+   for (const g of groupRows) (groupOrderByCol[g.collection_id] ||= []).push(g.id)
++  const { results: modelNameRows } = await c.env.DB.prepare('SELECT handle, name FROM model_names').all()
++  const modelNames = Object.fromEntries(modelNameRows.map((row) => [row.handle.toLowerCase(), row.name]))
+   for (const r of results) {
+-    if (r.shoot_type === 'session') r.session_model = sessionModelOf(parseJsonObject(r.meta_json))
++    if (r.shoot_type === 'session') {
++      r.session_model = addResolvedSessionMemberNames(
++        sessionModelOf(parseJsonObject(r.meta_json)),
++        modelNames
++      )
++    }
+     r.cover_thumb = r.cover_thumb || r.first_thumb
+     r.cover_large = r.cover_large || r.first_large
+     // medium이 없는 예전 사진은 large로 폴백합니다.
+@@ -359,7 +422,9 @@
+   if (!title) return c.json({ error: 'title required' }, 400)
+   const typeFields = await collectionTypeFields(c.env.DB, body)
+   if (typeFields.error) return c.json({ error: typeFields.error }, 400)
+-  const sessionModel = typeFields.shootType === 'session' ? normalizeSessionModel(body.session_model) : null
++  const sessionModel = typeFields.shootType === 'session'
++    ? normalizeSessionModel(body.session_model, { deriveMemberNames: true })
++    : null
+   const { meta } = await c.env.DB.prepare(
+     `INSERT INTO collections
+        (title, date, description, meta_json, published, shoot_type, location_type, related_event_id)
+@@ -392,10 +457,13 @@
+   }
+   const { results: modelNameRows } = await c.env.DB.prepare('SELECT handle, name FROM model_names').all()
+   const modelNames = Object.fromEntries(modelNameRows.map((row) => [row.handle.toLowerCase(), row.name]))
+-  col.session_model = sessionModelOf(parseJsonObject(col.meta_json))
++  col.session_model = addResolvedSessionMemberNames(
++    sessionModelOf(parseJsonObject(col.meta_json)),
++    modelNames
++  )
+   for (const g of groups) {
+-    const handles = [].concat(g.meta.twitter || [])
+-    g.model_names = handles.map((handle) => modelNames[handle.toLowerCase()] || (handles.length === 1 ? g.name : ''))
++    const handles = listMetaValues(g.meta.twitter).map((handle) => handle.replace(/^@/, ''))
++    g.model_names = resolvedModelNames(g.name, handles, modelNames, g.meta.member_names)
+   }
+   return c.json({ ...col, photos, groups }, 200, apiCacheHeaders(includeDrafts))
+ })
+@@ -476,7 +544,8 @@
+   for (const n of nameRows) names[n.handle.toLowerCase()] = n.name
+   for (const g of groups) {
+     const metadata = parseJsonObject(g.meta_json)
+-    g.handles = [].concat(metadata.twitter || [])
++    g.handles = listMetaValues(metadata.twitter).map((handle) => handle.replace(/^@/, ''))
++    g.memberNames = normalizeMemberNames(metadata.member_names, g.handles)
+     g.character = metadata.character || ''
+     g.series = seriesOf(metadata)
+   }
+@@ -487,11 +556,19 @@
+ // 닉네임을 주로 보여주고 계정은 보조로 두기 때문에, 어느 화면에서든 같은 이름이 나와야 합니다.
+ function modelNameResolver(groups, names, aliases) {
+   const fromFolder = {}
++  const explicitNames = {}
++  for (const g of groups) {
++    for (const handle of g.handles) {
++      const key = String(handle).toLowerCase()
++      const memberName = g.memberNames?.[key]
++      if (memberName && !explicitNames[key]) explicitNames[key] = memberName
++    }
++  }
+   // 합동 폴더 이름은 '선혈 & 마요'처럼 닉네임을 &로 이어 씁니다.
+   // 쪼갠 조각 수가 핸들 수와 같을 때만 순서대로 짝지어 이름을 얻습니다.
+   for (const g of groups) {
+     if (g.handles.length < 2) continue
+-    const parts = g.name.split('&').map((part) => part.trim()).filter(Boolean)
++    const parts = splitJoinedModelName(g.name, g.handles.length)
+     if (parts.length !== g.handles.length) continue
+     g.handles.forEach((handle, index) => {
+       const key = handle.toLowerCase()
+@@ -506,7 +583,7 @@
+   return (handle) => {
+     const key = String(handle || '').toLowerCase()
+     const canon = aliases ? resolveAlias(aliases, key) : key
+-    return names[canon] || names[key] || fromFolder[canon] || fromFolder[key] || '@' + handle
++    return names[canon] || names[key] || explicitNames[canon] || explicitNames[key] || fromFolder[canon] || fromFolder[key] || '@' + handle
+   }
+ }
+ 
+@@ -551,7 +628,11 @@
+   const aliasesFor = (kind, target) => aliasBy[kind][String(target).toLowerCase()] || []
+   // 모델 표시 이름은 사이트 전체와 같은 규칙을 씁니다.
+   const displayName = modelNameResolver(
+-    (groupRes.results || []).map((g) => ({ name: g.name, handles: [].concat(parseJsonObject(g.meta_json).twitter || []) })),
++    (groupRes.results || []).map((g) => {
++      const meta = parseJsonObject(g.meta_json)
++      const handles = listMetaValues(meta.twitter).map((handle) => handle.replace(/^@/, ''))
++      return { name: g.name, handles, memberNames: normalizeMemberNames(meta.member_names, handles) }
++    }),
+     names,
+     aliases
+   )
+@@ -562,7 +643,7 @@
+   for (const g of groupRes.results || []) {
+     const meta = parseJsonObject(g.meta_json)
+     const series = seriesOf(meta)
+-    const handles = [].concat(meta.twitter || [])
++    const handles = listMetaValues(meta.twitter).map((handle) => handle.replace(/^@/, ''))
+     if (meta.character) {
+       characters.push({
+         character: meta.character,
+@@ -964,7 +1045,7 @@
+       const handles = collectionModel ? collectionModel.twitter : listMetaValues(meta.twitter)
+       const modelNamesForPhoto = collectionModel
+         ? resolvedSessionModelNames(collectionModel, handles, modelNames)
+-        : handles.map((handle) => modelNames[handle.toLowerCase()] || (handles.length === 1 ? r.group_name : ''))
++        : resolvedModelNames(r.group_name, handles, modelNames, meta.member_names)
+       const character = collectionModel?.character || meta.character || ''
+       return {
+         key_thumb: r.key_thumb,
+@@ -1012,7 +1093,7 @@
+     const handles = collectionModel ? collectionModel.twitter : listMetaValues(meta.twitter)
+     const modelNamesForPhoto = collectionModel
+       ? resolvedSessionModelNames(collectionModel, handles, modelNames)
+-      : handles.map((handle) => modelNames[handle.toLowerCase()] || (handles.length === 1 ? r.group_name : ''))
++      : resolvedModelNames(r.group_name, handles, modelNames, meta.member_names)
+     return {
+       key_large: r.key_large,
+       key_medium: r.key_medium || r.key_large,
+@@ -1355,6 +1436,16 @@
+     if (handles.length) meta.twitter = handles
+     else delete meta.twitter
+   }
++  if ('member_names' in body || 'twitter' in body || 'name' in body) {
++    const handles = listMetaValues(meta.twitter).map((handle) => handle.replace(/^@/, ''))
++    const memberNames = normalizeMemberNames(
++      'member_names' in body ? body.member_names : meta.member_names,
++      handles,
++      name
++    )
++    if (Object.keys(memberNames).length) meta.member_names = memberNames
++    else delete meta.member_names
++  }
+   // 캐릭터명 — 빈 문자열이면 삭제
+   if ('character' in body) {
+     const character = String(body.character || '').trim()
+@@ -1416,7 +1507,7 @@
+   if ('session_model' in body) {
+     const metadata = parseJsonObject(existing.meta_json)
+     const sessionModel = (typeFields?.shootType || existing.shoot_type) === 'session'
+-      ? normalizeSessionModel(body.session_model)
++      ? normalizeSessionModel(body.session_model, { deriveMemberNames: true })
+       : null
+     if (sessionModel) metadata.session_model = sessionModel
+     else delete metadata.session_model
+diff --git a/public/app.js b/public/app.js
+--- a/public/app.js
++++ b/public/app.js
+@@ -422,17 +422,36 @@
+ 
+ // 모델 표기 규칙: 닉네임이 주, 계정(@핸들)은 작게 보조로.
+ // 여러 명이면 닉네임은 &, 계정은 , 로 구분합니다.
++function sessionModelDisplayNames(name, handles, memberNames = {}) {
++  const label = String(name || '').trim()
++  if (!handles.length) return label ? [label] : []
++  const parts = handles.length === 1
++    ? (label ? [label] : [])
++    : label.split(/\s*&\s*/).map((part) => part.trim()).filter(Boolean)
++  const splitNames = parts.length === handles.length ? parts : []
++  const names = handles.map((handle, index) =>
++    memberNames[String(handle).replace(/^@/, '').toLowerCase()] || splitNames[index] || ''
++  )
++  return names
++}
++
+ function modelCreditHtml(p) {
+   const handles = p.models || []
+-  if (!handles.length) return ''
+-  const names = handles.map((handle, index) => (p.model_names || [])[index])
++  const names = handles.length
++    ? handles.map((handle, index) => (p.model_names || [])[index])
++    : (p.model_names || [])
++  const displayNames = names.filter(Boolean)
+   const accounts = `<span class="handle">${handles.map((h) => '@' + esc(h)).join(', ')}</span>`
+-  if (!names.every(Boolean)) return accounts
+-  return `${names.map(esc).join(' &amp; ')} ${accounts}`
++  if (!handles.length) return displayNames.map(esc).join(' &amp; ')
++  return `${displayNames.length ? displayNames.map(esc).join(' &amp; ') + ' ' : ''}${accounts}`
+ }
+ // 스크린리더·alt용 평문
+ function modelCreditText(p) {
+-  return (p.models || []).map((handle, index) => (p.model_names || [])[index] || '@' + handle).join(' & ')
++  const handles = p.models || []
++  const names = p.model_names || []
++  return handles.length
++    ? handles.map((handle, index) => names[index] || '@' + handle).join(' & ')
++    : names.filter(Boolean).join(' & ')
+ }
+ 
+ // 스크린리더·검색엔진용 사진 설명. 폴더 크레딧이 붙은 사진은 모델·캐릭터까지 담습니다.
+@@ -580,9 +599,18 @@
+ }
+ function sessionModelValue(value) {
+   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
++  const handles = sessionList(value.twitter).map((handle) => handle.replace(/^@/, ''))
++  const memberNames = value.member_names && typeof value.member_names === 'object' && !Array.isArray(value.member_names)
++    ? Object.fromEntries(Object.entries(value.member_names).map(([handle, name]) => [
++      String(handle).trim().replace(/^@/, '').toLowerCase(),
++      String(name || '').trim(),
++    ]))
++    : {}
++  const names = handles.map((handle) => memberNames[handle.toLowerCase()] || '')
++  const name = names.length && names.every(Boolean) ? names.join(' & ') : String(value.name || '').trim()
+   const model = {
+-    name: String(value.name || '').trim(),
+-    handles: sessionList(value.twitter).map((handle) => handle.replace(/^@/, '')),
++    name,
++    handles,
+     character: String(value.character || '').trim(),
+     series: sessionList(value.series, /[,\n]+/),
+   }
+@@ -613,7 +641,19 @@
+   return sessionTitleFallback(title)
+ }
+ function sessionSubtitle(identity) {
+-  return [sessionList(identity?.series, /[,\n]+/).join(', '), identity?.character || ''].filter(Boolean).join(' · ')
++  const series = sessionList(identity?.series, /[,\n]+/)
++  let character = String(identity?.character || '').trim()
++  // 화면 표시만 정리합니다. 캐릭터 필드에 포함된 작품명은 경계가 명확할 때만 생략합니다.
++  for (const title of [...series].sort((a, b) => b.length - a.length)) {
++    if (character === title) { character = ''; break }
++    if (!character.startsWith(title)) continue
++    const rest = character.slice(title.length)
++    if (/^\s*[-–—:·]\s*/.test(rest)) {
++      character = rest.replace(/^\s*[-–—:·]\s*/, '').trim()
++      break
++    }
++  }
++  return [series.join(', '), character].filter(Boolean).join(' · ')
+ }
+ function sessionAccountsHtml(identity) {
+   return sessionList(identity?.handles).map((handle) =>
+@@ -971,9 +1011,10 @@
+   const sessionModel = col.session_model || null
+   if (shootTypeOf(col) === 'session' && sessionModel) {
+     const handles = [].concat(sessionModel.twitter || []).filter(Boolean)
++    const modelNames = sessionModelDisplayNames(sessionModel.name, handles, sessionModel.member_names)
+     for (const p of ungrouped) {
+       if (handles.length) p._models = handles
+-      if (sessionModel.name) p._modelNames = [sessionModel.name]
++      if (modelNames.length) p._modelNames = modelNames
+       if (sessionModel.character) p._character = sessionModel.character
+     }
+   }
+diff --git a/test/worker.test.js b/test/worker.test.js
+--- a/test/worker.test.js
++++ b/test/worker.test.js
+@@ -148,6 +148,47 @@
+     expect(photos.photos[0].model_names).toEqual(['Model Name'])
+     const collection = await (await SELF.fetch(`https://example.com/api/collections/${collectionId}`)).json()
+     expect(collection.groups[0].model_names).toEqual(['Model Name'])
++  })
++
++  it('persists per-account group names and uses them for public credits', async () => {
++    const collectionId = await seedCollection({ title: 'Structured credits', published: 1 })
++    const group = await env.DB.prepare(
++      `INSERT INTO groups (collection_id, name, meta_json) VALUES (?, '메쨩 & 하정', '{"twitter":["model_a","model_b"]}')`
++    ).bind(collectionId).run()
++    await env.DB.prepare(
++      `INSERT INTO photos (collection_id, group_id, key_large, key_thumb) VALUES (?, ?, 'member-large', 'member-thumb')`
++    ).bind(collectionId, group.meta.last_row_id).run()
++    await env.DB.prepare("INSERT INTO model_names (handle, name) VALUES ('model_a', 'Global A'), ('model_b', 'Global B')").run()
++    const { cookie } = await login()
++
++    const saved = await SELF.fetch(`https://example.com/api/groups/${group.meta.last_row_id}`, {
++      method: 'PATCH',
++      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
++      body: JSON.stringify({
++        name: '메쨩 & 하정',
++        twitter: 'model_a, model_b',
++        member_names: { model_a: '메쨩', model_b: '하정' },
++      }),
++    })
++    expect(saved.status).toBe(200)
++    const stored = await env.DB.prepare('SELECT meta_json FROM groups WHERE id = ?').bind(group.meta.last_row_id).first()
++    expect(JSON.parse(stored.meta_json).member_names).toEqual({ model_a: '메쨩', model_b: '하정' })
++
++    const derived = await SELF.fetch(`https://example.com/api/groups/${group.meta.last_row_id}`, {
++      method: 'PATCH',
++      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
++      body: JSON.stringify({ name: '메쨩 & 하정', twitter: 'model_a, model_b', member_names: {} }),
++    })
++    expect(derived.status).toBe(200)
++    const derivedStored = await env.DB.prepare('SELECT meta_json FROM groups WHERE id = ?').bind(group.meta.last_row_id).first()
++    expect(JSON.parse(derivedStored.meta_json).member_names).toEqual({ model_a: '메쨩', model_b: '하정' })
++
++    const collection = await (await SELF.fetch(`https://example.com/api/collections/${collectionId}`)).json()
++    expect(collection.groups[0].model_names).toEqual(['메쨩', '하정'])
++    const photos = await (await SELF.fetch('https://example.com/api/photos')).json()
++    expect(photos.photos[0].model_names).toEqual(['메쨩', '하정'])
++    const features = await (await SELF.fetch('https://example.com/api/feature-photos')).json()
++    expect(features[0].model_names).toEqual(['메쨩', '하정'])
+   })
+ })
+ 
+@@ -197,6 +238,7 @@
+     expect(detail.session_model).toEqual({
+       name: '메쨩님',
+       twitter: ['reze_model'],
++      member_names: { reze_model: '메쨩님' },
+       character: '체인소 맨 - 레제',
+       series: ['체인소 맨'],
+     })
+@@ -214,9 +256,88 @@
+     expect(updatedDetail.session_model).toEqual({
+       name: '하정님',
+       twitter: ['hajung_model'],
++      member_names: { hajung_model: '하정님' },
+       character: '',
+       series: [],
+     })
++  })
++
++  it('stores session names separately by account and returns them for ungrouped photos', async () => {
++    const { cookie } = await login()
++    const created = await SELF.fetch('https://example.com/api/collections', {
++      method: 'POST',
++      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
++      body: JSON.stringify({
++        title: 'Pair session',
++        shoot_type: 'session',
++        session_model: {
++          name: '메쨩 & 하정',
++          twitter: '@reze_model, @hajung_model',
++          member_names: {},
++        },
++      }),
++    })
++    expect(created.status).toBe(200)
++    const id = (await created.json()).id
++    const stored = await env.DB.prepare('SELECT meta_json FROM collections WHERE id = ?').bind(id).first()
++    expect(JSON.parse(stored.meta_json).session_model.member_names).toEqual({
++      reze_model: '메쨩',
++      hajung_model: '하정',
++    })
++    await env.DB.prepare(
++      `INSERT INTO photos (collection_id, key_large, key_thumb) VALUES (?, 'session-large', 'session-thumb')`
++    ).bind(id).run()
++
++    const detail = await (await SELF.fetch(`https://example.com/api/collections/${id}`, { headers: { Cookie: cookie } })).json()
++    expect(detail.session_model.member_names).toEqual({ reze_model: '메쨩', hajung_model: '하정' })
++    const features = await (await SELF.fetch('https://example.com/api/feature-photos', { headers: { Cookie: cookie } })).json()
++    const sessionFeature = features.find((photo) => photo.collection_id === id)
++    expect(sessionFeature.model_names).toEqual(['메쨩', '하정'])
++  })
++
++  it('resolves legacy session member names from the global account directory without rewriting storage', async () => {
++    const id = await seedCollection({ title: 'Legacy session', published: 1, shootType: 'session' })
++    await env.DB.prepare(
++      "UPDATE collections SET meta_json = ? WHERE id = ?"
++    ).bind(JSON.stringify({ session_model: {
++      name: 'ILLUSTAR FES · 개인 촬영',
++      twitter: ['legacy_a', 'legacy_b'],
++    } }), id).run()
++    await env.DB.prepare(
++      "INSERT INTO model_names (handle, name) VALUES ('legacy_a', '메쨩'), ('legacy_b', '하정')"
++    ).run()
++
++    const detail = await (await SELF.fetch(`https://example.com/api/collections/${id}`)).json()
++    expect(detail.session_model.member_names).toEqual({ legacy_a: '메쨩', legacy_b: '하정' })
++    const list = await (await SELF.fetch('https://example.com/api/collections')).json()
++    expect(list.find((collection) => collection.id === id).session_model.member_names)
++      .toEqual({ legacy_a: '메쨩', legacy_b: '하정' })
++    const stored = await env.DB.prepare('SELECT meta_json FROM collections WHERE id = ?').bind(id).first()
++    expect(JSON.parse(stored.meta_json).session_model.member_names).toBeUndefined()
++  })
++
++  it('does not attach an unmatched session title to the first person in a multi-account credit', async () => {
++    const { cookie } = await login()
++    const response = await SELF.fetch('https://example.com/api/collections', {
++      method: 'POST',
++      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
++      body: JSON.stringify({
++        title: 'Session with descriptive title',
++        shoot_type: 'session',
++        session_model: {
++          name: 'ILLUSTAR FES · 개인 촬영',
++          twitter: 'unknown_a, unknown_b',
++          member_names: {},
++        },
++      }),
++    })
++    const id = (await response.json()).id
++    await env.DB.prepare(
++      "INSERT INTO photos (collection_id, key_large, key_thumb) VALUES (?, 'unmatched-large', 'unmatched-thumb')"
++    ).bind(id).run()
++    const features = await (await SELF.fetch('https://example.com/api/feature-photos', { headers: { Cookie: cookie } })).json()
++    const sessionFeature = features.find((photo) => photo.collection_id === id)
++    expect(sessionFeature.model_names).toEqual(['', ''])
+   })
+ 
+   it('rejects invalid collection type metadata and defaults old rows to events', async () => {

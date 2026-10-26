@@ -1,0 +1,56 @@
+{
+  "id": "tweet-import-select",
+  "version": "1.0.0",
+  "title": "트윗 정보 선택 가져오기",
+  "baseCommit": "c1e54c341b420e2307ae381faa7be895b4c7a265",
+  "requires": [
+    "model-display-names"
+  ],
+  "databaseMigrations": [],
+  "files": [
+    {
+      "path": "public/admin.js",
+      "beforeSha256": "5fe9fcc6202f43384bc645c8f000468c6a01b0a95f747623001d53db8b91a853",
+      "afterSha256": "325abb3de88cddef86b33f8dcffb1956d4130dacd2d54feefabb550ea553ae41"
+    },
+    {
+      "path": "public/admin.html",
+      "beforeSha256": "0ff13b901c7c6eb8272fd2a080021aa068934040197e7c374972586439b21c63",
+      "afterSha256": "28bbf65acb1b57246037c5ee5b760a23ac9e3d47127c6f2f0d396d7ebb9b3199"
+    },
+    {
+      "path": "src/worker.js",
+      "beforeSha256": "b1a27632f0f3b0391d71e718419a46037e5ed896c98a7daeefa2707a872a70bd",
+      "afterSha256": "610da9ff696e7022d93f9511db5c6a360f9df5292e6ab0f2a30c2fcb1d2d4dc2"
+    },
+    {
+      "path": "test/tweet-import.node.mjs",
+      "beforeSha256": null,
+      "afterSha256": "9f31fbaa4f80db75dd523c07d89eab9a8a8792b19109f71f2abd6435e8c5b111"
+    },
+    {
+      "path": "test/tweet-import.worker.test.js",
+      "beforeSha256": null,
+      "afterSha256": "fc2fdac8a3b2aa16f03981af9b6a77293cc9a0ac57aec3703f94cbc4814a5528"
+    }
+  ],
+  "tests": [
+    "npm test",
+    "node --test test/tweet-import.node.mjs"
+  ],
+  "patchSha256": "fa75a1b709205fb7b38a5e74c859e4e8c8afb650d617f61a8b33dc630d767149",
+  "requiredMarkers": [
+    {
+      "path": "src/worker.js",
+      "text": "function normalizeMemberNames("
+    },
+    {
+      "path": "public/admin.js",
+      "text": "function normalizeMemberNameMap("
+    },
+    {
+      "path": "public/app.js",
+      "text": "function sessionModelDisplayNames("
+    }
+  ]
+}

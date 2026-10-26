@@ -1,0 +1,40 @@
+{
+  "id": "model-display-names",
+  "version": "1.0.0",
+  "title": "사람별 모델 표시 이름",
+  "baseCommit": "c1e54c341b420e2307ae381faa7be895b4c7a265",
+  "requires": [],
+  "databaseMigrations": [],
+  "files": [
+    {
+      "path": "public/admin.js",
+      "beforeSha256": "9b0eff064f5be976bb64ca4aa28aa1ca5318f03fc8a1c4c17e3b4dc098dc10cf",
+      "afterSha256": "5fe9fcc6202f43384bc645c8f000468c6a01b0a95f747623001d53db8b91a853"
+    },
+    {
+      "path": "public/admin.html",
+      "beforeSha256": "cdda63405518280c468c38d03b56da71a309d179f3d99b2c0686f1f32b66d9d5",
+      "afterSha256": "0ff13b901c7c6eb8272fd2a080021aa068934040197e7c374972586439b21c63"
+    },
+    {
+      "path": "src/worker.js",
+      "beforeSha256": "960b180fc6f1c688d70dbfd429b8f5aac3aa594d13e5ea8f10ef4039a25549cd",
+      "afterSha256": "b1a27632f0f3b0391d71e718419a46037e5ed896c98a7daeefa2707a872a70bd"
+    },
+    {
+      "path": "public/app.js",
+      "beforeSha256": "7fddd58ff97a7c71dd2ef106ac275d5a1f21c969a86618a5fd520fbfb20045a9",
+      "afterSha256": "def9ec922a200d89561d9e5aa3d14cef8c574edd5e440ec72e134b7fbcf121cd"
+    },
+    {
+      "path": "test/worker.test.js",
+      "beforeSha256": "fc61cba9106efbe9989c3bf6c63c3edc4c01c18bcea25aa74f834428376eca86",
+      "afterSha256": "ac9293f8ba77babeb4a24f776cfc16d56dbcd3ad3f21ef95738870f612f4052e"
+    }
+  ],
+  "tests": [
+    "npm test"
+  ],
+  "patchSha256": "9cd20531a2901b7ee2e9943e8d3717c6c631f69ad14764a88025c8d911f0ef19",
+  "requiredMarkers": []
+}

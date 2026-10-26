@@ -1,0 +1,502 @@
+diff --git a/public/app.js b/public/app.js
+--- a/public/app.js
++++ b/public/app.js
+@@ -441,6 +441,76 @@
+   return [p._event || p.title, models, p._character || p.character].filter(Boolean).join(' · ')
+ }
+ 
++function createFeatureTransition(holder) {
++  let front = holder.querySelector('img')
++  const ambient = holder.parentElement?.querySelector('.feature-ambient')
++  let busy = false
++  return async (key, alt, onSwap = () => {}) => {
++    if (busy || !document.body.contains(holder)) return null
++    busy = true
++    const incoming = new Image()
++    let incomingAmbient = null
++    incoming.alt = alt
++    incoming.style.opacity = '0'
++    incoming.fetchPriority = 'high'
++    try {
++      await new Promise((resolve, reject) => {
++        let settled = false
++        const finish = (error) => {
++          if (settled) return
++          settled = true
++          clearTimeout(timeout)
++          incoming.onload = incoming.onerror = null
++          if (error) { incoming.removeAttribute('src'); reject(error) }
++          else resolve()
++        }
++        // 시간 초과 시 현재 사진을 유지합니다. 미완성 사진으로는 전환하지 않습니다.
++        const timeout = setTimeout(() => finish(new Error('Feature image timeout')), 15000)
++        incoming.onerror = () => finish(new Error('Feature image failed'))
++        if (!incoming.decode) incoming.onload = () => finish()
++        incoming.src = '/img/' + key
++        if (incoming.decode) incoming.decode().then(() => finish(), finish)
++      })
++      if (!document.body.contains(holder)) return false
++      const outgoing = front
++      const outgoingAmbient = ambient?.querySelector('img')
++      incomingAmbient = ambient ? incoming.cloneNode() : null
++      if (incomingAmbient) {
++        incomingAmbient.alt = ''
++        incomingAmbient.removeAttribute('fetchpriority')
++        ambient.appendChild(incomingAmbient)
++      }
++      holder.appendChild(incoming)
++      void incoming.offsetWidth // opacity: 0인 초기 상태를 확정한 뒤 페이드합니다.
++      await new Promise((resolve) => {
++        const finish = (event) => {
++          if (event && (event.target !== incoming || event.propertyName !== 'opacity')) return
++          clearTimeout(timeout)
++          incoming.removeEventListener('transitionend', finish)
++          resolve()
++        }
++        const timeout = setTimeout(() => finish(), 1600)
++        incoming.addEventListener('transitionend', finish)
++        onSwap()
++        incoming.style.opacity = '1'
++        outgoing.style.opacity = '0'
++        if (incomingAmbient) incomingAmbient.style.opacity = '1'
++        if (outgoingAmbient) outgoingAmbient.style.opacity = '0'
++      })
++      outgoing.remove()
++      outgoingAmbient?.remove()
++      front = incoming
++      return true
++    } catch {
++      incoming.remove()
++      incomingAmbient?.remove()
++      return false
++    } finally {
++      busy = false
++    }
++  }
++}
++
+ // 랜덤 모드: 전체 사진 셔플 순환, 한 바퀴 돌기 전엔 반복 없음. 캡션은 행사명 + 모델(+캐릭터)
+ // 스와이프/드래그로 수동 넘기기 가능, 캡션은 페이드 전환
+ function startRandomFeature(deck) {
+@@ -448,59 +518,53 @@
+   const link = document.getElementById('featureLink')
+   if (!holder || !link || deck.length < 2) return
+   let idx = 0
+-  const imgA = holder.querySelector('img')
+-  const imgB = imgA.cloneNode()
+-  imgB.style.opacity = '0'
+-  holder.appendChild(imgB)
+-  let front = imgA, back = imgB
+-  let busy = false
++  const transition = createFeatureTransition(holder)
+ 
+   const setCaption = (p) => {
+     if (!document.body.contains(link)) return
+     link.href = featureHref(p)
+     const info = link.querySelector('.feature-info')
+-    info.classList.add('swap') // 페이드아웃
+-    setTimeout(() => {
+-      link.querySelector('.name').textContent = p.title
+-      link.querySelector('.models').innerHTML = modelCreditHtml(p)
+-      link.querySelector('.character').textContent = p.character || ''
+-      info.classList.remove('swap') // 페이드인
+-    }, 420)
++    link.querySelector('.name').textContent = p.title
++    link.querySelector('.name').classList.toggle('name--long', p.title.length > 18)
++    link.querySelector('.models').innerHTML = modelCreditHtml(p)
++    link.querySelector('.character').textContent = p.character || ''
++    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
++    const desktop = window.matchMedia('(min-width: 761px)').matches
++    const headingParts = desktop ? info.querySelectorAll('.feature-heading, .feature-details') : []
++    const parts = headingParts.length ? headingParts : [info]
++    parts.forEach((part, index) => part.animate?.(
++      desktop && !reduceMotion
++        ? [{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'translateY(0)' }]
++        : [{ opacity: 0 }, { opacity: 1 }],
++      { duration: reduceMotion ? 1 : 450 + index * 100, easing: desktop ? 'ease-out' : 'ease' },
++    ))
+   }
+ 
+   const show = (dir) => {
+-    if (busy) return
+-    busy = true
+     startTimer() // 자동이든 수동이든, 전환이 일어난 순간부터 다음 자동 넘김을 다시 셉니다
++    let nextIdx = idx
++    let nextDeck = deck
+     if (dir > 0) {
+-      idx++
+-      if (idx >= deck.length) {
++      nextIdx++
++      if (nextIdx >= deck.length) {
+         // 한 바퀴 끝 — 다시 섞되 직전 사진 연속 방지
+         const last = deck[deck.length - 1]
+-        shuffle(deck)
+-        if (deck.length > 1 && deck[0] === last) [deck[0], deck[1]] = [deck[1], deck[0]]
+-        idx = 0
++        nextDeck = shuffle([...deck])
++        if (nextDeck[0] === last) [nextDeck[0], nextDeck[1]] = [nextDeck[1], nextDeck[0]]
++        nextIdx = 0
+       }
+     } else {
+-      idx = (idx - 1 + deck.length) % deck.length
++      nextIdx = (idx - 1 + deck.length) % deck.length
+     }
+-    const p = deck[idx]
+-    back.src = '/img/' + (p.key_medium || p.key_large)
+-    let swapped = false
+-    const swap = () => {
+-      if (swapped) return
+-      swapped = true
+-      back.style.opacity = '1'
+-      front.style.opacity = '0'
+-      ;[front, back] = [back, front]
++    const p = nextDeck[nextIdx]
++    transition(p.key_medium || p.key_large, [p.title, modelCreditText(p), p.character].filter(Boolean).join(' · '), () => {
++      idx = nextIdx
++      deck = nextDeck
+       setCaption(p)
+-      busy = false
+-    }
+-    // decode가 지연/실패해도 잠기지 않게 타임아웃 폴백
+-    if (back.decode) {
+-      back.decode().then(swap).catch(swap)
+-      setTimeout(swap, 900)
+-    } else swap()
++    }).then((shown) => {
++      // 깨진 사진 하나 때문에 순환 전체가 멈추지 않도록 다음 시도에서는 건너뜁니다.
++      if (shown === false) { idx = nextIdx; deck = nextDeck }
++    })
+   }
+ 
+   const startTimer = () => {
+@@ -546,21 +610,13 @@
+   const keys = col.photos.map((p) => p.key_medium || p.key_large)
+   if (keys.length < 2) return
+   let i = Math.max(0, keys.indexOf(coverKey))
+-  const imgA = holder.querySelector('img')
+-  const imgB = imgA.cloneNode()
+-  imgB.style.opacity = '0'
+-  holder.appendChild(imgB)
+-  let front = imgA, back = imgB
++  if (!document.body.contains(holder)) return
++  const transition = createFeatureTransition(holder)
+   featureTimer = setInterval(() => {
+     if (document.hidden || !document.body.contains(holder)) return
+-    i = (i + 1) % keys.length
+-    back.src = '/img/' + keys[i]
+-    const swap = () => {
+-      back.style.opacity = '1'
+-      front.style.opacity = '0'
+-      ;[front, back] = [back, front]
+-    }
+-    back.decode ? back.decode().then(swap).catch(swap) : swap()
++    const next = (i + 1) % keys.length
++    transition(keys[next], holder.querySelector('img').alt, () => { i = next })
++      .then((shown) => { if (shown === false) i = next })
+   }, 5000)
+ }
+ 
+diff --git a/test/feature-transition.node.mjs b/test/feature-transition.node.mjs
+new file mode 100644
+--- /dev/null
++++ b/test/feature-transition.node.mjs
+@@ -0,0 +1,299 @@
++import assert from 'node:assert/strict'
++import { readFileSync } from 'node:fs'
++import { runInNewContext } from 'node:vm'
++import { test } from 'node:test'
++
++const source = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8')
++const functions = source.slice(source.indexOf('function createFeatureTransition('), source.indexOf('// 컬렉션 카드 HTML'))
++const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve() }
++
++test('ambient waits for the sharp photo and crossfades to the same source without accumulating layers', async () => {
++  const f = fixture({ withAmbient: true, desktop: true })
++  f.start()
++  for (const key of ['2', '3']) {
++    f.swipe()
++    const incoming = f.requested.at(-1)
++    const previous = f.ambient.images[0].src
++    await f.advance(1000)
++    assert.deepEqual(f.ambient.images.map((image) => image.src), [previous])
++    incoming.ready()
++    await flush()
++    assert.deepEqual(f.ambient.images.map((image) => image.src), [previous, '/img/' + key])
++    assert.equal(f.ambient.images[0].style.opacity, '0')
++    assert.equal(f.ambient.images[1].style.opacity, '1')
++    assert.equal(f.ambient.images[1].alt, '')
++    assert.equal(f.fields['.name'].textContent, key)
++    incoming.endTransition()
++    await flush()
++    assert.deepEqual(f.ambient.images.map((image) => image.src), ['/img/' + key])
++    assert.deepEqual(f.holder.images.map((image) => image.src), ['/img/' + key])
++  }
++  assert.deepEqual(f.animations.map(([part]) => part), ['heading', 'details', 'heading', 'details'])
++})
++
++test('failed or timed-out photos leave the existing ambient image in place', async () => {
++  const f = fixture({ withAmbient: true })
++  f.start()
++  f.swipe()
++  f.requested[0].fail()
++  await flush()
++  assert.deepEqual(f.ambient.images.map((image) => image.src), ['/img/1'])
++  f.swipe()
++  await f.advance(15000)
++  assert.deepEqual(f.ambient.images.map((image) => image.src), ['/img/1'])
++  assert.equal(f.animations.length, 0)
++})
++
++test('mobile keeps the original single caption fade', async () => {
++  const f = fixture({ withAmbient: true })
++  f.start()
++  f.swipe()
++  f.requested[0].ready()
++  await flush()
++  assert.deepEqual(f.animations.map(([part]) => part), ['mobile'])
++  assert.equal(f.animations[0][1][0].transform, undefined)
++})
++
++test('fixed collection rotation updates the ambient with the sharp photo', async () => {
++  const f = fixture({ withAmbient: true })
++  await f.startFixed()
++  await f.advance(5000)
++  f.requested[0].ready()
++  await flush()
++  await f.advance(1600)
++  assert.deepEqual(f.ambient.images.map((image) => image.src), ['/img/2'])
++  assert.deepEqual(f.holder.images.map((image) => image.src), ['/img/2'])
++})
++
++function fixture({ decode = true, withAmbient = false, desktop = false } = {}) {
++  let now = 0, nextTimer = 0, attached = true
++  let timers = []
++  const requested = []
++  const schedule = (fn, delay, interval = 0) => {
++    const timer = { id: ++nextTimer, fn, at: now + delay, interval }
++    timers.push(timer)
++    return timer.id
++  }
++  const clear = (id) => { timers = timers.filter((timer) => timer.id !== id) }
++  const advance = async (delay) => {
++    const end = now + delay
++    for (;;) {
++      timers.sort((a, b) => a.at - b.at || a.id - b.id)
++      const timer = timers[0]
++      if (!timer || timer.at > end) break
++      timers.shift()
++      now = timer.at
++      timer.fn()
++      await flush()
++      if (timer.interval && !timers.some((entry) => entry.id === timer.id)) {
++        // callbacks can replace their own interval; the stored ID must still be current.
++        if (context.featureTimer === timer.id) timers.push({ ...timer, at: now + timer.interval })
++      }
++    }
++    now = end
++    await flush()
++  }
++  class Img {
++    constructor() {
++      this.style = { opacity: '' }
++      this.alt = '1'
++      this.listeners = new Map()
++      this.complete = false
++      this.naturalWidth = 0
++      if (!decode) this.decode = undefined
++    }
++    set src(value) {
++      this._src = value
++      requested.push(this)
++    }
++    get src() { return this._src }
++    decode() { return new Promise((resolve, reject) => { this.resolve = resolve; this.reject = reject }) }
++    ready() {
++      this.complete = true
++      this.naturalWidth = 853
++      if (this.resolve) this.resolve()
++      else this.onload?.()
++    }
++    fail() { if (this.reject) this.reject(new Error('Image failed')); else this.onerror?.() }
++    removeAttribute(name) { if (name === 'src') this._src = '' }
++    addEventListener(type, fn) { this.listeners.set(type, fn) }
++    removeEventListener(type, fn) { if (this.listeners.get(type) === fn) this.listeners.delete(type) }
++    cloneNode() {
++      const clone = new Img()
++      clone._src = this.src
++      clone.style.opacity = this.style.opacity
++      clone.complete = this.complete
++      clone.naturalWidth = this.naturalWidth
++      return clone
++    }
++    remove() {
++      holder.images = holder.images.filter((image) => image !== this)
++      ambient.images = ambient.images.filter((image) => image !== this)
++    }
++    get offsetWidth() { return 320 }
++    endTransition() { this.listeners.get('transitionend')?.({ target: this, propertyName: 'opacity' }) }
++  }
++  const original = new Img()
++  original._src = '/img/1'
++  original.complete = true
++  original.naturalWidth = 853
++  const ambient = {
++    images: [original.cloneNode()],
++    querySelector: () => ambient.images[0],
++    appendChild: (image) => ambient.images.push(image),
++  }
++  const holder = {
++    parentElement: { querySelector: () => withAmbient ? ambient : null },
++    images: [original],
++    querySelector: () => holder.images[0],
++    appendChild(image) {
++      assert.ok(image.complete && image.naturalWidth, 'only a ready image may enter the visible stage')
++      holder.images.push(image)
++    },
++  }
++  const fields = {
++    '.name': { textContent: '1', classList: { toggle() {} } }, '.models': { innerHTML: 'model-1' },
++    '.character': { textContent: 'character-1' }, '.feature-info': { animate() {} },
++  }
++  const animations = []
++  fields['.feature-info'].animate = (...args) => animations.push(['mobile', ...args])
++  fields['.feature-info'].querySelectorAll = () => ['heading', 'details'].map((part) => ({
++    animate: (...args) => animations.push([part, ...args]),
++  }))
++  const events = new Map()
++  const link = { href: '#1', querySelector: (selector) => fields[selector], addEventListener: (type, fn) => events.set(type, fn) }
++  const deck = [1, 2, 3, 4].map((id) => ({ title: String(id), key_medium: String(id), character: 'character-' + id }))
++  const context = {
++    window: { matchMedia: (query) => ({ matches: desktop && query.includes('761px') }) },
++    document: { querySelector: () => holder, getElementById: () => link, body: { contains: () => attached }, hidden: false },
++    Image: Img, featureTimer: null, setTimeout: schedule, clearTimeout: clear,
++    setInterval: (fn, delay) => schedule(fn, delay, delay), clearInterval: clear,
++    shuffle: (items) => items, featureHref: (photo) => '#' + photo.title,
++    modelCreditHtml: (photo) => 'model-' + photo.title, modelCreditText: (photo) => 'model-' + photo.title,
++    api: async () => ({ photos: deck }),
++  }
++  const { startRandomFeature, startFeatureRotation } = runInNewContext(functions + '\n({startRandomFeature, startFeatureRotation})', context)
++  const swipe = (direction = 1) => {
++    events.get('mousedown')({ clientX: 100, clientY: 100 })
++    events.get('mouseup')({ clientX: direction > 0 ? 0 : 200, clientY: 100 })
++  }
++  return { holder, ambient, animations, requested, fields, link, advance, swipe, start: () => startRandomFeature(deck),
++    startFixed: () => startFeatureRotation(1, '1'), detach: () => { attached = false } }
++}
++
++test('slow loading keeps photo and caption together; 2 → 3 never reintroduces photo 1', async () => {
++  const f = fixture()
++  f.start()
++  f.swipe()
++  await f.advance(2000)
++  assert.equal(f.fields['.name'].textContent, '1')
++  assert.deepEqual(f.holder.images.map((image) => image.src), ['/img/1'])
++  f.requested[0].ready()
++  await flush()
++  assert.equal(f.fields['.name'].textContent, '2')
++  assert.equal(f.link.href, '#2')
++  assert.match(f.requested[0].alt, /model-2/)
++  f.requested[0].endTransition()
++  await flush()
++  assert.deepEqual(f.holder.images.map((image) => image.src), ['/img/2'])
++  f.swipe()
++  await f.advance(2000)
++  assert.equal(f.fields['.name'].textContent, '2')
++  assert.deepEqual(f.holder.images.map((image) => image.src), ['/img/2'])
++  f.requested[1].ready()
++  await flush()
++  assert.equal(f.fields['.name'].textContent, '3')
++  assert.deepEqual(f.holder.images.map((image) => image.src), ['/img/2', '/img/3'])
++  await f.advance(1600)
++  assert.deepEqual(f.holder.images.map((image) => image.src), ['/img/3'])
++})
++
++test('repeated swipes are ignored until loading and the fade have both finished', async () => {
++  const f = fixture()
++  f.start()
++  f.swipe()
++  f.swipe()
++  assert.equal(f.requested.length, 1)
++  f.requested[0].ready()
++  await flush()
++  f.swipe()
++  await flush()
++  assert.equal(f.requested.length, 1)
++  await f.advance(1600)
++  f.swipe()
++  assert.equal(f.requested[1].src, '/img/3')
++})
++
++test('a failed image preserves the current photo, caption and link and skips the broken entry', async () => {
++  const f = fixture()
++  f.start()
++  f.swipe()
++  f.requested[0].fail()
++  await flush()
++  assert.equal(f.fields['.name'].textContent, '1')
++  assert.equal(f.link.href, '#1')
++  assert.deepEqual(f.holder.images.map((image) => image.src), ['/img/1'])
++  f.swipe()
++  assert.equal(f.requested[1].src, '/img/3')
++  f.requested[1].ready()
++  await flush()
++  assert.equal(f.fields['.name'].textContent, '3')
++})
++
++test('a timeout unlocks navigation without exposing an unfinished or late image', async () => {
++  const f = fixture()
++  f.start()
++  f.swipe()
++  await f.advance(15000)
++  assert.equal(f.fields['.name'].textContent, '1')
++  assert.deepEqual(f.holder.images.map((image) => image.src), ['/img/1'])
++  f.requested[0].ready()
++  await flush()
++  assert.equal(f.holder.images.length, 1)
++  f.swipe()
++  assert.equal(f.requested.at(-1).src, '/img/3')
++})
++
++test('an image completing after leaving home does not change the old caption or stage', async () => {
++  const f = fixture()
++  f.start()
++  f.swipe()
++  f.detach()
++  f.requested[0].ready()
++  await flush()
++  assert.equal(f.fields['.name'].textContent, '1')
++  assert.equal(f.holder.images.length, 1)
++})
++
++test('browsers without decode wait for load and retain the current photo on error', async () => {
++  const f = fixture({ decode: false })
++  f.start()
++  f.swipe()
++  await f.advance(2000)
++  assert.equal(f.holder.images.length, 1)
++  f.requested[0].ready()
++  await flush()
++  assert.equal(f.fields['.name'].textContent, '2')
++  await f.advance(1600)
++  f.swipe()
++  f.requested[1].fail()
++  await flush()
++  assert.equal(f.fields['.name'].textContent, '2')
++  assert.deepEqual(f.holder.images.map((image) => image.src), ['/img/2'])
++})
++
++test('fixed collection rotation also waits for readiness and skips failed photos', async () => {
++  const f = fixture()
++  await f.startFixed()
++  await f.advance(5000)
++  await f.advance(2000)
++  assert.deepEqual(f.holder.images.map((image) => image.src), ['/img/1'])
++  f.requested[0].fail()
++  await flush()
++  await f.advance(3000)
++  assert.equal(f.requested[1].src, '/img/3')
++  f.requested[1].ready()
++  await flush()
++  await f.advance(1600)
++  assert.deepEqual(f.holder.images.map((image) => image.src), ['/img/3'])
++})

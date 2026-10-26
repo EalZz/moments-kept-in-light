@@ -1,0 +1,30 @@
+{
+  "id": "gallery-layout",
+  "version": "1.0.0",
+  "title": "모바일 갤러리 배치와 데스크톱 중앙 정렬",
+  "baseCommit": "c1e54c341b420e2307ae381faa7be895b4c7a265",
+  "requires": [],
+  "databaseMigrations": [],
+  "files": [
+    {
+      "path": "public/app.js",
+      "beforeSha256": "7fddd58ff97a7c71dd2ef106ac275d5a1f21c969a86618a5fd520fbfb20045a9",
+      "afterSha256": "0c81ca5c0e521bc2e84319248580d9ba1960a1beaeab5b1fdd90b7332f633131"
+    },
+    {
+      "path": "public/style.css",
+      "beforeSha256": "200aeced2d68b8bb4d7e8ddd13feb3dbe1c6ad7b1d2b48ff05cbacf2b787cd64",
+      "afterSha256": "4cf877f73701706af746668f01911ac07d0bd609f5173c72ef4d8cdd5fed3788"
+    },
+    {
+      "path": "test/gallery-layout.node.mjs",
+      "beforeSha256": "f67df1534a13231e11b3c49557d4f28b541763a33f6dc6a7bd4159204f651e91",
+      "afterSha256": "1b4bcec20920cd7e1babb8ad1e80f3443255a1ebd71e005b71092a19f1ed55d5"
+    }
+  ],
+  "tests": [
+    "node --test test/gallery-layout.node.mjs"
+  ],
+  "patchSha256": "0ca9fcb6ea51e4744cc788888de791a13c2e167a65330cae04c424edd8192fd9",
+  "requiredMarkers": []
+}

@@ -1,0 +1,74 @@
+name: Publish feature updates
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'updates/**'
+      - 'scripts/check-feature-update.mjs'
+      - 'scripts/package-feature-updates.py'
+      - 'test/updates/**'
+      - '.github/workflows/feature-updates.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: feature-updates
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.repository == 'EalZz/moments-kept-in-light'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate packages and reversible application
+        run: node --test test/updates/check-feature-update.node.mjs
+      - name: Build feature archives
+        run: python3 scripts/package-feature-updates.py --output "$RUNNER_TEMP/feature-updates"
+      - name: Read release metadata
+        id: metadata
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          release = json.loads(Path('updates/release.json').read_text())
+          assert re.fullmatch(r'feature-updates-\d{4}-\d{2}-\d{2}(?:-\d+)?', release['tag'])
+          assert '\n' not in release['title'] and '\r' not in release['title']
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('tag=' + release['tag'] + '\n')
+              output.write('title=' + release['title'] + '\n')
+          PY
+      - name: Publish verified release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.metadata.outputs.tag }}
+          RELEASE_TITLE: ${{ steps.metadata.outputs.title }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            if [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = "true" ]; then
+              echo "An unfinished draft exists. Inspect its assets before publishing."
+              exit 1
+            fi
+            echo "Release already exists; published version will not be overwritten. Increment updates/release.json for a new release."
+            exit 0
+          fi
+          gh release create "$RELEASE_TAG" "$RUNNER_TEMP/feature-updates/"*.zip "$RUNNER_TEMP/feature-updates/SHA256SUMS.txt" \
+            --target "$GITHUB_SHA" --title "$RELEASE_TITLE" --notes-file updates/RELEASE.md --draft --latest=false
+          gh release download "$RELEASE_TAG" --dir "$RUNNER_TEMP/feature-verify"
+          cd "$RUNNER_TEMP/feature-verify"
+          cmp "$RUNNER_TEMP/feature-updates/SHA256SUMS.txt" SHA256SUMS.txt
+          sha256sum --check SHA256SUMS.txt
+          gh release edit "$RELEASE_TAG" --draft=false --latest=false
