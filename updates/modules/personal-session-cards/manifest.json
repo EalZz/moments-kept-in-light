@@ -1,0 +1,68 @@
+{
+  "id": "personal-session-cards",
+  "version": "1.0.0",
+  "title": "개인 세션 카드와 대표 사진 구도",
+  "baseCommit": "c1e54c341b420e2307ae381faa7be895b4c7a265",
+  "requires": [
+    "model-display-names"
+  ],
+  "databaseMigrations": [],
+  "files": [
+    {
+      "path": "public/admin.html",
+      "beforeSha256": "0ff13b901c7c6eb8272fd2a080021aa068934040197e7c374972586439b21c63",
+      "afterSha256": "9e759236d662594589108b738349c9e1c25225beaf8b88b1e79207841d8e7f41"
+    },
+    {
+      "path": "public/admin.js",
+      "beforeSha256": "5fe9fcc6202f43384bc645c8f000468c6a01b0a95f747623001d53db8b91a853",
+      "afterSha256": "55779c15ca48abde31ddabb166f8135e7345cd9a678f60e3b7a660341e2b6693"
+    },
+    {
+      "path": "public/app.js",
+      "beforeSha256": "def9ec922a200d89561d9e5aa3d14cef8c574edd5e440ec72e134b7fbcf121cd",
+      "afterSha256": "fe2ef3194e3fb754c738b14526749e4c09dd11ef5533c14424d6caaf9bc1c99c"
+    },
+    {
+      "path": "public/index.html",
+      "beforeSha256": "7187fb276ea284ad82b5a4838fd7ababd13058f25f90504af037f151b8d57133",
+      "afterSha256": "453b5976a75999a818b7eae3e2e3368f4fcb07392050ac93e6936979f4a0714a"
+    },
+    {
+      "path": "public/session-card.js",
+      "beforeSha256": null,
+      "afterSha256": "f8ae4d3653cc2046e52ba29f5635a83c7b6822b6c7d61b90e92b0d7fca1c6adf"
+    },
+    {
+      "path": "public/style.css",
+      "beforeSha256": "200aeced2d68b8bb4d7e8ddd13feb3dbe1c6ad7b1d2b48ff05cbacf2b787cd64",
+      "afterSha256": "a3e07f9c054e971010547229c3d5d3d6f88ca13f8fd3a5c10b9908a413ed1fad"
+    },
+    {
+      "path": "src/worker.js",
+      "beforeSha256": "b1a27632f0f3b0391d71e718419a46037e5ed896c98a7daeefa2707a872a70bd",
+      "afterSha256": "aed83c115230361c51f54b277c43b3de64c3fc7e4c5e74249a7fb5368a4ee416"
+    },
+    {
+      "path": "test/personal-session-cards.worker.test.js",
+      "beforeSha256": null,
+      "afterSha256": "d7c665053944b3020d2cb4df7a74b2b4116bc052a9a68a2d4bbdc720983262d6"
+    },
+    {
+      "path": "test/session-card.node.mjs",
+      "beforeSha256": null,
+      "afterSha256": "d5e026704e6889274a2a50cd03ef004414339a0414cd88ac99bf888e32522ae5"
+    }
+  ],
+  "tests": [
+    "npm test",
+    "node --test test/session-card.node.mjs"
+  ],
+  "patchSha256": "ec30b0b2ef01a50774a8bb4a0e09ddc4e6c4420f123fcdeffc91d106f95a31fe",
+  "requiredMarkers": [
+    {
+      "path": "public/app.js",
+      "text": "function sessionModelDisplayNames("
+    }
+  ]
+}

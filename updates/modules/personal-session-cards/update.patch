@@ -1,0 +1,947 @@
+diff --git a/public/admin.html b/public/admin.html
+index 5cdce4e0ad3ed7cf2cf2735d10ed8d9410f724c1..5fff7e4281c29f3965c6f9795f39e7ec523747ab 100644
+--- a/public/admin.html
++++ b/public/admin.html
+@@ -7,4 +7,5 @@
+   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+   <link rel="stylesheet" href="style.css" />
++  <script src="session-card.js"></script>
+   <style>
+     .admin-wrap { max-width: 960px; margin: 0 auto; padding: 0 24px 80px; }
+diff --git a/public/admin.js b/public/admin.js
+index e33e61099c59946f0264a02fda4797901945294b..dbdd24f4829548f0ebecafb49cad9dcefb7f7ad3 100644
+--- a/public/admin.js
++++ b/public/admin.js
+@@ -805,4 +805,148 @@ function createAdminDialog(title, content) {
+ }
+ 
++async function openSessionCardEditor(col, photo) {
++  const key = photo.key_medium || photo.key_large || photo.key_thumb
++  const preview = sessionCardHtml({ ...col, photo_count: col.photos.length }, {
++    key, width: photo.width, height: photo.height, crop: col.session_card_crop,
++  })
++  const { overlay, close } = createAdminDialog('카드 영역 편집', `
++    <div class="session-crop-editor">
++      <div>
++        <div class="session-crop-stage">
++          <img src="/img/${esc(key)}" alt="대표 사진" />
++          <div class="session-crop-selection" tabindex="0" aria-label="카드에 표시할 사진 영역. 방향키로 이동" hidden></div>
++        </div>
++        <fieldset class="session-crop-controls" disabled>
++          <div class="row">
++            <button type="button" data-crop-ratio="1:1" aria-pressed="false">1:1</button>
++            <button type="button" data-crop-ratio="4:5" aria-pressed="false">4:5</button>
++            <button type="button" class="session-crop-reset">전체 사진 사용</button>
++          </div>
++          <label>영역 크기 <input class="session-crop-size" type="range" min="20" max="100" step="1" value="100" disabled /></label>
++          <p class="field-hint">박스를 끌거나 방향키로 옮기면 오른쪽 카드에 바로 반영됩니다.</p>
++        </fieldset>
++      </div>
++      <div class="session-crop-previews">
++        <div><h4>PC · 3:2</h4><div class="session-preview-desktop">${preview}</div></div>
++        <div><h4>모바일 · 16:9</h4><div class="session-preview-mobile">${preview}</div></div>
++      </div>
++    </div>
++    <div class="dialog-actions">
++      <span class="session-crop-status" role="status"></span>
++      <button type="button" class="dialogCancel">취소</button>
++      <button type="button" class="primary session-crop-save" disabled>저장</button>
++    </div>`)
++  overlay.classList.add('session-crop-dialog')
++  overlay.setAttribute('role', 'dialog')
++  overlay.setAttribute('aria-modal', 'true')
++  overlay.setAttribute('aria-label', '카드 영역 편집')
++  overlay.querySelector('.dialogCancel').addEventListener('click', close)
++  const stage = overlay.querySelector('.session-crop-stage')
++  const image = stage.querySelector('img')
++  const selection = stage.querySelector('.session-crop-selection')
++  const controls = overlay.querySelector('.session-crop-controls')
++  const size = overlay.querySelector('.session-crop-size')
++  const ratios = overlay.querySelectorAll('[data-crop-ratio]')
++  const cards = overlay.querySelectorAll('.session-card')
++  const status = overlay.querySelector('.session-crop-status')
++  const save = overlay.querySelector('.session-crop-save')
++  let crop = col.session_card_crop || null
++  let dragPoint = null
++  try {
++    await image.decode()
++  } catch {
++    status.textContent = '대표 사진을 불러오지 못했습니다.'
++    return
++  }
++  if (!overlay.isConnected) return
++  const sourceRatio = image.naturalWidth / image.naturalHeight
++  const coverRatio = photo.width / photo.height
++  const maxHeight = (ratio) => Math.min(1, sourceRatio / (ratio === '4:5' ? 0.8 : 1))
++  const clamp = (value, max) => Math.max(0, Math.min(max, value))
++  const center = () => crop ? { x: crop.x + crop.width / 2, y: crop.y + crop.height / 2 } : { x: 0.5, y: 0.5 }
++
++  function refresh() {
++    selection.hidden = !crop
++    size.disabled = !crop
++    if (crop) {
++      selection.style.cssText = `left:${crop.x * 100}%;top:${crop.y * 100}%;width:${crop.width * 100}%;height:${crop.height * 100}%`
++      size.value = Math.round(100 * crop.height / maxHeight(crop.ratio))
++    }
++    ratios.forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.cropRatio === crop?.ratio)))
++    cards.forEach((card) => updateSessionCardCrop(card, crop, coverRatio))
++  }
++
++  function setArea(ratio, scale, point) {
++    const height = maxHeight(ratio) * scale
++    const width = Math.min(1, height * (ratio === '4:5' ? 0.8 : 1) / sourceRatio)
++    crop = {
++      ratio, width, height,
++      x: clamp(point.x - width / 2, 1 - width),
++      y: clamp(point.y - height / 2, 1 - height),
++    }
++    refresh()
++  }
++
++  function moveArea(point) {
++    crop.x = clamp(point.x - crop.width / 2, 1 - crop.width)
++    crop.y = clamp(point.y - crop.height / 2, 1 - crop.height)
++    refresh()
++  }
++
++  ratios.forEach((button) => button.addEventListener('click', () => setArea(button.dataset.cropRatio, 1, center())))
++  size.addEventListener('input', () => setArea(crop.ratio, Number(size.value) / 100, center()))
++  overlay.querySelector('.session-crop-reset').addEventListener('click', () => {
++    crop = null
++    refresh()
++  })
++  const pointer = (event) => {
++    const bounds = stage.getBoundingClientRect()
++    return { x: (event.clientX - bounds.left) / bounds.width, y: (event.clientY - bounds.top) / bounds.height }
++  }
++  stage.addEventListener('pointerdown', (event) => {
++    if (!crop || dragPoint || event.button !== 0) return
++    const point = pointer(event)
++    if (event.target !== selection) moveArea(point)
++    const current = center()
++    dragPoint = { id: event.pointerId, x: current.x - point.x, y: current.y - point.y }
++    stage.setPointerCapture(event.pointerId)
++  })
++  stage.addEventListener('pointermove', (event) => {
++    if (dragPoint?.id !== event.pointerId) return
++    const point = pointer(event)
++    moveArea({ x: point.x + dragPoint.x, y: point.y + dragPoint.y })
++  })
++  stage.addEventListener('lostpointercapture', () => { dragPoint = null })
++  selection.addEventListener('keydown', (event) => {
++    const direction = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key]
++    if (!direction) return
++    event.preventDefault()
++    const point = center()
++    const step = event.shiftKey ? 0.05 : 0.01
++    moveArea({ x: point.x + direction[0] * step, y: point.y + direction[1] * step })
++  })
++  save.addEventListener('click', async () => {
++    save.disabled = true
++    controls.disabled = true
++    status.textContent = '저장 중…'
++    try {
++      await api(`/collections/${col.id}/session-card-crop`, {
++        method: 'PATCH', json: { photo_id: photo.id, crop },
++      })
++      if (!overlay.isConnected) return
++      close()
++      await renderCollection(col.id)
++    } catch (error) {
++      if (!overlay.isConnected) return
++      status.textContent = error.message
++      save.disabled = false
++      controls.disabled = false
++    }
++  })
++  refresh()
++  controls.disabled = false
++  save.disabled = false
++}
++
+ function openGroupEditor(group, onSaved) {
+   const currentHandles = [].concat((group.meta && group.meta.twitter) || []).join(', ')
+@@ -915,4 +1059,5 @@ async function renderCollection(id) {
+   const ungrouped = col.photos.filter((p) => !p.group_id)
+   const isFeatured = settings.featured_collection_id === col.id
++  const sessionCover = col.shoot_type === 'session' && col.photos.find((photo) => photo.id === col.cover_photo_id)
+ 
+   app.innerHTML = `
+@@ -921,4 +1066,5 @@ async function renderCollection(id) {
+       <div class="r">
+         <button id="backBtn">← 목록</button>
++        ${sessionCover ? '<button id="sessionCardBtn">카드 영역 편집</button>' : ''}
+         <div class="admin-menu">
+           <button class="admin-menu-toggle" aria-expanded="false" aria-haspopup="menu">컬렉션 메뉴 ⋯</button>
+@@ -947,4 +1093,5 @@ async function renderCollection(id) {
+   setupAdminMenu()
+   document.getElementById('backBtn').addEventListener('click', goCollections)
++  document.getElementById('sessionCardBtn')?.addEventListener('click', () => openSessionCardEditor(col, sessionCover))
+   document.getElementById('editColBtn').addEventListener('click', () => openCollectionEditor(col))
+   document.getElementById('publishBtn').addEventListener('click', async () => {
+diff --git a/public/app.js b/public/app.js
+index 05300eca6404edaa9be42c63547dc471691f8a5b..8ddfb49cace50562e2a7fdd7a05df8f7f12a7a11 100644
+--- a/public/app.js
++++ b/public/app.js
+@@ -594,71 +594,9 @@ function locationLabel(value) {
+   return ({ venue: 'Event venue', outdoor: 'Outdoor', studio: 'Studio' }[value] || '')
+ }
+-function sessionList(value, separator = /[,\s]+/) {
+-  const values = Array.isArray(value) ? value : String(value || '').split(separator)
+-  return values.map((item) => String(item || '').trim()).filter(Boolean)
+-}
+-function sessionModelValue(value) {
+-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+-  const handles = sessionList(value.twitter).map((handle) => handle.replace(/^@/, ''))
+-  const memberNames = value.member_names && typeof value.member_names === 'object' && !Array.isArray(value.member_names)
+-    ? Object.fromEntries(Object.entries(value.member_names).map(([handle, name]) => [
+-      String(handle).trim().replace(/^@/, '').toLowerCase(),
+-      String(name || '').trim(),
+-    ]))
+-    : {}
+-  const names = handles.map((handle) => memberNames[handle.toLowerCase()] || '')
+-  const name = names.length && names.every(Boolean) ? names.join(' & ') : String(value.name || '').trim()
+-  const model = {
+-    name,
+-    handles,
+-    character: String(value.character || '').trim(),
+-    series: sessionList(value.series, /[,\n]+/),
+-  }
+-  return model.name || model.handles.length || model.character || model.series.length ? model : null
+-}
+-function sessionTitleFallback(title) {
+-  const parts = String(title || '').split(/\s+[-–—]\s+/)
+-  if (parts.length < 2) return { name: String(title || '').trim(), handles: [], character: '', series: [] }
+-  return {
+-    name: parts.shift().trim(),
+-    handles: [],
+-    character: parts.join(' - ').trim(),
+-    series: [],
+-  }
+-}
+-function sessionIdentityOf(title, sections = [], collectionModel = null) {
+-  const direct = sessionModelValue(collectionModel)
+-  if (direct) return direct
+-  const legacy = sections.find((section) => section.name || section.character || section.handles?.length)
+-  if (legacy) {
+-    return {
+-      name: sessionList(legacy.modelNames).join(' & ') || String(legacy.name || '').trim(),
+-      handles: sessionList(legacy.handles),
+-      character: String(legacy.character || '').trim(),
+-      series: sessionList(legacy.series, /[,\n]+/),
+-    }
+-  }
+-  return sessionTitleFallback(title)
+-}
+-function sessionSubtitle(identity) {
+-  const series = sessionList(identity?.series, /[,\n]+/)
+-  let character = String(identity?.character || '').trim()
+-  // 화면 표시만 정리합니다. 캐릭터 필드에 포함된 작품명은 경계가 명확할 때만 생략합니다.
+-  for (const title of [...series].sort((a, b) => b.length - a.length)) {
+-    if (character === title) { character = ''; break }
+-    if (!character.startsWith(title)) continue
+-    const rest = character.slice(title.length)
+-    if (/^\s*[-–—:·]\s*/.test(rest)) {
+-      character = rest.replace(/^\s*[-–—:·]\s*/, '').trim()
+-      break
+-    }
+-  }
+-  return [series.join(', '), character].filter(Boolean).join(' · ')
+-}
+ function sessionAccountsHtml(identity) {
+   return sessionList(identity?.handles).map((handle) =>
+     `<a href="https://x.com/${esc(handle)}" target="_blank" rel="noopener">@${esc(handle)} ↗</a>`).join(', ')
+ }
+-function cardHtml(c) {
++function cardHtml(c, measureOnly = false) {
+   const type = shootTypeOf(c)
+   const identity = type === 'session' ? sessionIdentityOf(c.title, [], c.session_model) : null
+@@ -671,5 +609,5 @@ function cardHtml(c) {
+     <a class="card card--${type}" href="#/c/${c.id}">
+       <div class="cover" ${c.cover_w && c.cover_h ? `style="aspect-ratio:${c.cover_w}/${c.cover_h}"` : ''}>
+-        <img src="/img/${esc(c.cover_medium || c.cover_large || c.cover_thumb)}" alt="${esc(cardTitle)}" loading="lazy" data-fade />
++        ${measureOnly ? '' : `<img src="/img/${esc(c.cover_medium || c.cover_large || c.cover_thumb)}" alt="${esc(cardTitle)}" loading="lazy" data-fade />`}
+       </div>
+       ${type === 'event' && (c.preview_thumbs || []).length ? `<div class="strip">
+@@ -701,7 +639,15 @@ function syncCollectionToggle(wrap) {
+     ? wrap.scrollHeight > Math.ceil(foldHeight) + 8
+     : wrap.scrollHeight > Math.ceil(wrap.clientHeight) + 8
+-  wrap.classList.toggle('is-overflowing', hasOverflow)
+-  wrap.dataset.hasOverflow = String(hasOverflow)
+-  button.hidden = !hasOverflow
++  const overflowing = wrap.dataset.kind === 'session'
++    ? Number(wrap.dataset.foldCount) < wrap.children.length
++    : hasOverflow
++  wrap.classList.toggle('is-overflowing', overflowing)
++  wrap.dataset.hasOverflow = String(overflowing)
++  button.hidden = !overflowing
++  if (wrap.dataset.kind === 'session') {
++    Array.from(wrap.children).forEach((card, index) => {
++      card.inert = !expanded && index >= Number(wrap.dataset.foldCount)
++    })
++  }
+ }
+ function animateCollectionToggle(wrap, button, expanded) {
+@@ -757,5 +703,8 @@ function layoutCollections(force) {
+       ? (innerWidth <= 620 ? 1 : 2)
+       : (innerWidth <= 980 ? 2 : 3)
+-    if (!force && +wrap.dataset.cols === n) return
++    if (!force && +wrap.dataset.cols === n) {
++      if (kind === 'session') updateSessionFold(wrap)
++      return
++    }
+     wrap.dataset.cols = n
+     const heights = Array(n).fill(0)
+@@ -767,14 +716,43 @@ function layoutCollections(force) {
+     for (const c of items) {
+       const i = heights.indexOf(Math.min(...heights))
+-      colEls[i].insertAdjacentHTML('beforeend', cardHtml(c))
++      colEls[i].insertAdjacentHTML('beforeend', cardHtml(c, kind === 'session'))
+       // 카드 높이 추정 (열 폭 기준 비율): 커버 + 행사 썸네일 스트립 + 텍스트
+       const coverH = c.cover_w && c.cover_h ? c.cover_h / c.cover_w : 0.75
+       heights[i] += coverH + (kind === 'event' && (c.preview_thumbs || []).length ? 0.36 : 0) + 0.28
+     }
+-    wrap.replaceChildren(...colEls)
+-    syncCollectionToggle(wrap)
++    if (kind === 'session') {
++      // 기존 2열 카드가 접힘 경계 안에 몇 장 들어왔는지 실제 스타일로 계산합니다.
++      const measure = document.createElement('div')
++      measure.className = 'collections session-fold-measure'
++      measure.inert = true
++      measure.replaceChildren(...colEls)
++      wrap.after(measure)
++      wrap.innerHTML = items.map((c) => sessionCardHtml(c, {
++        key: c.cover_medium || c.cover_large || c.cover_thumb,
++        width: c.cover_w, height: c.cover_h, crop: c.session_card_crop,
++        href: '#/c/' + c.id,
++      })).join('')
++      updateSessionFold(wrap)
++    } else {
++      wrap.replaceChildren(...colEls)
++      syncCollectionToggle(wrap)
++    }
+   })
+   markLoadedImages()
+ }
++function updateSessionFold(wrap) {
++  const measure = wrap.nextElementSibling
++  const limit = parseFloat(getComputedStyle(measure).getPropertyValue('--collection-fold-y'))
++  const measureTop = measure.getBoundingClientRect().top
++  const count = Array.from(measure.querySelectorAll('.card'))
++    .filter((card) => card.getBoundingClientRect().top - measureTop < limit).length
++  wrap.dataset.foldCount = String(count)
++  const last = wrap.children[count - 1]
++  if (last) {
++    const height = last.getBoundingClientRect().bottom - wrap.getBoundingClientRect().top
++    wrap.style.setProperty('--collection-fold-y', `${Math.ceil(height)}px`)
++  }
++  syncCollectionToggle(wrap)
++}
+ window.addEventListener('resize', () => layoutCollections(false))
+ 
+@@ -888,4 +866,10 @@ async function renderHome() {
+   homeCollections = collectionsByType
+   layoutCollections(true)
++  if (document.fonts && collectionsByType.session.length) {
++    const sessions = document.getElementById('collections-session')
++    void document.fonts.ready.then(() => {
++      if (sessions.isConnected && sessions.dataset.expanded !== 'true') updateSessionFold(sessions)
++    })
++  }
+   main.querySelectorAll('.collection-toggle').forEach((button) => {
+     button.addEventListener('click', () => {
+@@ -893,5 +877,15 @@ async function renderHome() {
+       if (!wrap) return
+       const expanded = wrap.dataset.expanded !== 'true'
+-      animateCollectionToggle(wrap, button, expanded)
++      if (wrap.dataset.kind === 'session') {
++        wrap.dataset.expanded = String(expanded)
++        wrap.classList.toggle('is-collapsed', !expanded)
++        button.setAttribute('aria-expanded', String(expanded))
++        button.setAttribute('aria-label', expanded ? '컬렉션 접기' : '컬렉션 더보기')
++        button.title = expanded ? '접기' : '더보기'
++        button.querySelector('.collection-toggle-arrow').textContent = expanded ? '↑' : '↓'
++        syncCollectionToggle(wrap)
++      } else {
++        animateCollectionToggle(wrap, button, expanded)
++      }
+     })
+   })
+diff --git a/public/index.html b/public/index.html
+index 8a4ab3db3a00e7ea9f22ab2feeba40db647a40f2..b0d5cecd53548f9439faed143f3080aca39198cc 100644
+--- a/public/index.html
++++ b/public/index.html
+@@ -72,4 +72,5 @@
+ 
+   <script src="config.js"></script>
++  <script src="session-card.js"></script>
+   <script src="app.js"></script>
+ </body>
+diff --git a/public/session-card.js b/public/session-card.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..768b02cfbcc7a11f9d5b2b16b1049e6534679372
+--- /dev/null
++++ b/public/session-card.js
+@@ -0,0 +1,113 @@
++function sessionList(value, separator = /[,\s]+/) {
++  const values = Array.isArray(value) ? value : String(value || '').split(separator)
++  return values.map((item) => String(item || '').trim()).filter(Boolean)
++}
++function sessionModelValue(value) {
++  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
++  const handles = sessionList(value.twitter).map((handle) => handle.replace(/^@/, ''))
++  const memberNames = value.member_names && typeof value.member_names === 'object' && !Array.isArray(value.member_names)
++    ? Object.fromEntries(Object.entries(value.member_names).map(([handle, name]) => [
++      String(handle).trim().replace(/^@/, '').toLowerCase(),
++      String(name || '').trim(),
++    ]))
++    : {}
++  const names = handles.map((handle) => memberNames[handle.toLowerCase()] || '')
++  const name = names.length && names.every(Boolean) ? names.join(' & ') : String(value.name || '').trim()
++  const model = {
++    name,
++    handles,
++    character: String(value.character || '').trim(),
++    series: sessionList(value.series, /[,\n]+/),
++  }
++  return model.name || model.handles.length || model.character || model.series.length ? model : null
++}
++function sessionTitleFallback(title) {
++  const parts = String(title || '').split(/\s+[-–—]\s+/)
++  if (parts.length < 2) return { name: String(title || '').trim(), handles: [], character: '', series: [] }
++  return {
++    name: parts.shift().trim(),
++    handles: [],
++    character: parts.join(' - ').trim(),
++    series: [],
++  }
++}
++function sessionIdentityOf(title, sections = [], collectionModel = null) {
++  const direct = sessionModelValue(collectionModel)
++  if (direct) return direct
++  const legacy = sections.find((section) => section.name || section.character || section.handles?.length)
++  if (legacy) {
++    return {
++      name: sessionList(legacy.modelNames).join(' & ') || String(legacy.name || '').trim(),
++      handles: sessionList(legacy.handles),
++      character: String(legacy.character || '').trim(),
++      series: sessionList(legacy.series, /[,\n]+/),
++    }
++  }
++  return sessionTitleFallback(title)
++}
++function sessionSubtitleParts(identity) {
++  const series = sessionList(identity?.series, /[,\n]+/)
++  let character = String(identity?.character || '').trim()
++  // 화면 표시만 정리합니다. 캐릭터 필드에 포함된 작품명은 경계가 명확할 때만 생략합니다.
++  for (const title of [...series].sort((a, b) => b.length - a.length)) {
++    if (character === title) { character = ''; break }
++    if (!character.startsWith(title)) continue
++    const rest = character.slice(title.length)
++    if (/^\s*[-–—:·]\s*/.test(rest)) {
++      character = rest.replace(/^\s*[-–—:·]\s*/, '').trim()
++      break
++    }
++  }
++  return { series: series.join(', '), character }
++}
++function sessionSubtitle(identity) {
++  const { series, character } = sessionSubtitleParts(identity)
++  return [series, character].filter(Boolean).join(' · ')
++}
++
++// 영역 좌표는 원본 사진의 너비와 높이에 대한 비율입니다.
++function sessionCardCropStyle(crop) {
++  if (!crop) return ''
++  return `--crop-width:${100 / crop.width}%;--crop-height:${100 / crop.height}%;--crop-left:${-100 * crop.x / crop.width}%;--crop-top:${-100 * crop.y / crop.height}%`
++}
++
++function sessionCardMediaStyle(crop, sourceRatio) {
++  const fullRatio = Number.isFinite(sourceRatio) && sourceRatio > 0 ? Math.min(1, sourceRatio) : 0.8
++  const ratio = crop ? (crop.ratio === '4:5' ? 0.8 : 1) : fullRatio
++  return `--session-photo-ratio:${ratio}`
++}
++
++function sessionCardHtml(collection, { key, width, height, crop, href } = {}) {
++  const identity = sessionIdentityOf(collection.title, [], collection.session_model)
++  const title = identity.name || collection.title
++  const { series, character } = sessionSubtitleParts(identity)
++  const location = ({ venue: 'Event venue', outdoor: 'Outdoor', studio: 'Studio' })[collection.location_type]
++  const info = [location, `${collection.photo_count} photos`].filter(Boolean).join(' · ')
++  const src = `/img/${esc(key)}`
++  const tag = href ? 'a' : 'div'
++  const loading = href ? ' loading="lazy"' : ''
++  return `
++    <${tag} class="session-card"${href ? ` href="${esc(href)}"` : ''} style="${sessionCardMediaStyle(crop, width / height)}">
++      <img class="session-card-ambient" src="${src}" alt=""${loading} />
++      <div class="session-card-photo${crop ? ' has-crop' : ''}">
++        <img src="${src}" alt="" style="${sessionCardCropStyle(crop)}"${loading} />
++      </div>
++      <div class="session-card-text">
++        <div class="session-card-name-slot">
++          <div class="session-card-name" title="${esc(title)}">${esc(title)}</div>
++        </div>
++        ${series || character ? `<div class="session-card-subtitle">
++          ${series ? `<div class="session-card-series" title="${esc(series)}">${esc(series)}</div>` : ''}
++          ${character ? `<div class="session-card-character" title="${esc(character)}">${esc(character)}</div>` : ''}
++        </div>` : ''}
++        <div class="session-card-info">${esc(info)}</div>
++      </div>
++    </${tag}>`
++}
++
++function updateSessionCardCrop(card, crop, sourceRatio) {
++  card.style.cssText = sessionCardMediaStyle(crop, sourceRatio)
++  const photo = card.querySelector('.session-card-photo')
++  photo.classList.toggle('has-crop', Boolean(crop))
++  photo.firstElementChild.style.cssText = sessionCardCropStyle(crop)
++}
+diff --git a/public/style.css b/public/style.css
+index c7294988b0ef284553bfaf61e67802caa0a757e8..7dab593740960c6c3bd8ab7734a3db76a566b943 100644
+--- a/public/style.css
++++ b/public/style.css
+@@ -1307,4 +1307,202 @@ main.wrap { padding-top: 76px; }
+ }
+ 
++.collection-block .session-fold-measure {
++  position: absolute;
++  inset: 0 0 auto;
++  height: 0;
++  padding: 0;
++  overflow: hidden;
++  visibility: hidden;
++}
++.collection-block .session-fold-measure .cover { position: relative; }
++.collection-block .collections[data-kind="session"] {
++  display: grid;
++  grid-template-columns: repeat(2, minmax(0, 1fr));
++  gap: 24px;
++  padding-bottom: 0;
++  transition: none;
++}
++.collection-block .collections[data-kind="session"]::before,
++.collection-block .collections[data-kind="session"]::after { display: none; }
++.collections[data-kind="session"] > [inert] { visibility: hidden; }
++.collection-block--session .collection-toggle:not([hidden]) {
++  position: static;
++  transform: none;
++  margin: 8px auto 0;
++  width: 60px;
++  height: 52px;
++}
++.session-card {
++  --session-card-ratio: 1.5;
++  --session-mobile-ratio: calc(16 / 9);
++  --session-photo-width: calc(100% * var(--session-photo-ratio) / var(--session-card-ratio));
++  position: relative;
++  isolation: isolate;
++  display: block;
++  aspect-ratio: var(--session-card-ratio);
++  overflow: hidden;
++  border-radius: 4px;
++  background: #121115;
++  color: var(--fg);
++  container-type: inline-size;
++}
++.session-card::after {
++  content: '';
++  position: absolute;
++  z-index: 3;
++  inset: 0;
++  border: 1px solid rgba(255, 255, 255, .26);
++  border-radius: inherit;
++  pointer-events: none;
++}
++a.session-card:hover::after,
++a.session-card:focus-visible::after { border-color: rgba(255, 255, 255, .65); }
++.session-card-ambient {
++  position: absolute;
++  inset: 0;
++  width: 100%;
++  height: 100%;
++  object-fit: cover;
++  filter: blur(22px) brightness(.52);
++  transform: scale(1.1);
++}
++.session-card::before {
++  content: '';
++  position: absolute;
++  z-index: 1;
++  inset: 0 0 0 calc(var(--session-photo-width) - 10%);
++  background: linear-gradient(to right, transparent, rgba(10, 9, 12, .92));
++  pointer-events: none;
++}
++.session-card-photo {
++  position: absolute;
++  z-index: 1;
++  inset: 0 auto 0 0;
++  width: var(--session-photo-width);
++  overflow: hidden;
++  mask-image: linear-gradient(
++    to right,
++    #000 74%,
++    rgba(0, 0, 0, .9) 81%,
++    rgba(0, 0, 0, .55) 90%,
++    rgba(0, 0, 0, .18) 97%,
++    transparent
++  );
++}
++.session-card-photo > img {
++  display: block;
++  width: 100%;
++  height: 100%;
++  object-fit: contain;
++}
++.session-card-photo.has-crop > img {
++  position: absolute;
++  width: var(--crop-width);
++  height: var(--crop-height);
++  left: var(--crop-left);
++  top: var(--crop-top);
++  max-width: none;
++  object-fit: fill;
++}
++.session-card-text {
++  position: absolute;
++  z-index: 2;
++  inset: 8% 3.5% 8% max(47%, calc(var(--session-photo-width) + 2.5%));
++  display: flex;
++  flex-direction: column;
++  justify-content: center;
++  overflow: hidden;
++  overflow-wrap: anywhere;
++  word-break: keep-all;
++  text-align: left;
++  text-shadow: 0 1px 8px #0b0b0d;
++}
++.session-card-name,
++.session-card-series,
++.session-card-character {
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++}
++.session-card-name-slot { container-type: inline-size; }
++.session-card-name {
++  font-family: var(--font-display);
++  /* 긴 팀 닉네임의 실측 폭에 서체 폴백 여유를 더해 한 줄에 맞춥니다. */
++  font-size: min(23px, calc((100cqi - 1px) / 7.8));
++  font-weight: 500;
++  line-height: 1.17;
++}
++.session-card-subtitle {
++  display: grid;
++  grid-template-columns: minmax(0, 1fr);
++  gap: 2px;
++  margin-top: 6px;
++  font-size: clamp(10px, 2.8cqi, 11px);
++  letter-spacing: 0.08em;
++  line-height: 1.35;
++}
++.session-card-series {
++  font-size: clamp(9px, 2.5cqi, 10px);
++}
++.session-card-info {
++  margin-top: 7px;
++  color: #cfcbc7;
++  font-size: clamp(9px, 2.5cqi, 10px);
++  letter-spacing: 0.04em;
++  line-height: 1.3;
++}
++@media (max-width: 620px) {
++  .collection-block .collections[data-kind="session"] {
++    grid-template-columns: minmax(0, 1fr);
++    gap: 14px;
++  }
++  .collections[data-kind="session"] .session-card { --session-card-ratio: var(--session-mobile-ratio); }
++}
++
++.session-crop-editor {
++  display: grid;
++  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
++  gap: 24px;
++  align-items: start;
++}
++.admin-dialog.session-crop-dialog .inner { max-width: 1060px; }
++.session-crop-stage {
++  position: relative;
++  width: fit-content;
++  max-width: 100%;
++  margin-inline: auto;
++  overflow: hidden;
++  background: var(--bg);
++  touch-action: none;
++}
++.session-crop-stage > img {
++  width: auto;
++  height: auto;
++  max-height: min(54vh, 500px);
++  user-select: none;
++  pointer-events: none;
++}
++.session-crop-selection {
++  position: absolute;
++  border: 1px solid #e5d7c3;
++  box-shadow: 0 0 0 2000px rgba(0, 0, 0, .56);
++  cursor: move;
++}
++.session-crop-selection:focus-visible { outline: 2px solid var(--accent); }
++.session-crop-controls { min-width: 0; margin-top: 14px; border: 0; }
++.session-crop-controls .row { flex-wrap: wrap; }
++.session-crop-controls label { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
++.session-crop-controls input[type="range"] { flex: 1; min-width: 0; accent-color: var(--accent); }
++.session-crop-controls button[aria-pressed="true"] { border-color: var(--accent); color: #e5d7c3; }
++.session-crop-previews { display: grid; gap: 15px; }
++.session-crop-previews h4 { margin: 0 0 7px; font-size: 12px; font-weight: 500; color: var(--fg-dim); }
++.session-preview-desktop { max-width: 560px; }
++.session-preview-mobile { max-width: 352px; }
++.session-preview-mobile .session-card { --session-card-ratio: var(--session-mobile-ratio); }
++.session-crop-status { margin-right: auto; color: var(--fg-dim); }
++@media (max-width: 740px) {
++  .session-crop-editor { grid-template-columns: minmax(0, 1fr); }
++}
++
+ /* ---------- collection detail ---------- */
+ .col-head { padding: 72px 0 48px; text-align: center; }
+diff --git a/src/worker.js b/src/worker.js
+index 38523aeb99af5e8cc6eb7abaed668f542d369cc9..f331bf95eba14923cc63e2e16cd21bc3dcd70e2d 100644
+--- a/src/worker.js
++++ b/src/worker.js
+@@ -76,4 +76,18 @@ function sessionModelOf(meta) {
+ }
+ 
++function normalizeSessionCardCrop(value) {
++  if (!value || !Number.isSafeInteger(value.photo_id) || value.photo_id < 1 ||
++      !['1:1', '4:5'].includes(value.ratio)) return null
++  const { photo_id, ratio, x, y, width, height } = value
++  if (![x, y, width, height].every(Number.isFinite) || x < 0 || y < 0 ||
++      width < 0.0001 || height < 0.0001 || x + width > 1.00000001 || y + height > 1.00000001) return null
++  return { photo_id, ratio, x, y, width, height }
++}
++
++function sessionCardCropOf(meta, coverPhotoId) {
++  const crop = normalizeSessionCardCrop(meta.session_card_crop)
++  return crop?.photo_id === coverPhotoId ? crop : null
++}
++
+ function splitJoinedModelName(name, count) {
+   const label = String(name || '').trim()
+@@ -352,5 +366,5 @@ app.get('/api/collections', async (c) => {
+   const visibility = includeDrafts ? 'col.deleted_at IS NULL' : 'col.deleted_at IS NULL AND col.published = 1'
+   const { results } = await c.env.DB.prepare(
+-    `SELECT col.*, p.key_thumb AS cover_thumb, p.key_large AS cover_large, p.key_medium AS cover_medium,
++    `SELECT col.*, p.id AS active_cover_id, p.key_thumb AS cover_thumb, p.key_large AS cover_large, p.key_medium AS cover_medium,
+             p.width AS cover_w, p.height AS cover_h, p.group_id AS cover_group,
+             (SELECT COUNT(*) FROM photos WHERE collection_id = col.id AND deleted_at IS NULL) AS photo_count,
+@@ -385,8 +399,10 @@ app.get('/api/collections', async (c) => {
+   for (const r of results) {
+     if (r.shoot_type === 'session') {
++      const meta = parseJsonObject(r.meta_json)
+       r.session_model = addResolvedSessionMemberNames(
+-        sessionModelOf(parseJsonObject(r.meta_json)),
++        sessionModelOf(meta),
+         modelNames
+       )
++      r.session_card_crop = sessionCardCropOf(meta, r.active_cover_id)
+     }
+     r.cover_thumb = r.cover_thumb || r.first_thumb
+@@ -394,6 +410,9 @@ app.get('/api/collections', async (c) => {
+     // medium이 없는 예전 사진은 large로 폴백합니다.
+     r.cover_medium = r.cover_medium || r.first_medium || r.cover_large
+-    r.cover_w = r.cover_w || r.first_w
+-    r.cover_h = r.cover_h || r.first_h
++    if (r.shoot_type !== 'session' || !r.active_cover_id) {
++      r.cover_w = r.cover_w || r.first_w
++      r.cover_h = r.cover_h || r.first_h
++    }
++    delete r.active_cover_id
+     const pool = (thumbsByCol[r.id] || []).filter((t) => t.key_thumb !== r.cover_thumb)
+     // 사람(폴더)별로 묶고, 폴더 순서 → 폴더 없는 사진 → 대표 사진의 폴더(후순위) 순으로 한 장씩
+@@ -458,8 +477,12 @@ app.get('/api/collections/:id', async (c) => {
+   const { results: modelNameRows } = await c.env.DB.prepare('SELECT handle, name FROM model_names').all()
+   const modelNames = Object.fromEntries(modelNameRows.map((row) => [row.handle.toLowerCase(), row.name]))
++  const meta = parseJsonObject(col.meta_json)
+   col.session_model = addResolvedSessionMemberNames(
+-    sessionModelOf(parseJsonObject(col.meta_json)),
++    sessionModelOf(meta),
+     modelNames
+   )
++  if (col.shoot_type === 'session' && photos.some((photo) => photo.id === col.cover_photo_id)) {
++    col.session_card_crop = sessionCardCropOf(meta, col.cover_photo_id)
++  }
+   for (const g of groups) {
+     const handles = listMetaValues(g.meta.twitter).map((handle) => handle.replace(/^@/, ''))
+@@ -1477,4 +1500,37 @@ app.delete('/api/groups/:id', requireAdmin, async (c) => {
+ })
+ 
++// 경로별로 갱신해 사진 구도와 세션 정보가 동시에 저장돼도 서로 덮어쓰지 않습니다.
++const collectionMetadataSql = "CASE WHEN json_valid(meta_json) THEN CASE WHEN json_type(meta_json) = 'object' THEN meta_json ELSE '{}' END ELSE '{}' END"
++
++app.patch('/api/collections/:id/session-card-crop', requireAdmin, async (c) => {
++  const body = await c.req.json().catch(() => null)
++  const photoId = body?.photo_id
++  const crop = body?.crop ? normalizeSessionCardCrop({ ...body.crop, photo_id: photoId }) : null
++  if (!Number.isSafeInteger(photoId) || photoId < 1 || (body.crop !== null && !crop)) {
++    return c.json({ error: '카드 영역을 확인해 주세요.' }, 400)
++  }
++  const id = c.req.param('id')
++  const photo = await c.env.DB.prepare(
++    'SELECT width, height FROM photos WHERE id = ? AND collection_id = ? AND deleted_at IS NULL'
++  ).bind(photoId, id).first()
++  if (!photo) return c.json({ error: '대표 사진을 다시 확인해 주세요.' }, 409)
++  if (crop && photo.width > 0 && photo.height > 0) {
++    const ratio = (crop.width * photo.width) / (crop.height * photo.height)
++    const target = crop.ratio === '1:1' ? 1 : 0.8
++    if (Math.abs(ratio - target) > 0.02) return c.json({ error: '선택한 영역과 비율이 맞지 않습니다.' }, 400)
++  }
++  const update = crop
++    ? `json_set(${collectionMetadataSql}, '$.session_card_crop', json(?))`
++    : `json_remove(${collectionMetadataSql}, '$.session_card_crop')`
++  const values = crop ? [JSON.stringify(crop)] : []
++  const result = await c.env.DB.prepare(
++    `UPDATE collections SET meta_json = ${update}
++     WHERE id = ? AND deleted_at IS NULL AND shoot_type = 'session' AND cover_photo_id = ?
++       AND EXISTS (SELECT 1 FROM photos WHERE id = ? AND collection_id = collections.id AND deleted_at IS NULL)`
++  ).bind(...values, id, photoId, photoId).run()
++  if (!result.meta.changes) return c.json({ error: '대표 사진이 바뀌었습니다. 새로고침 후 다시 편집해 주세요.' }, 409)
++  return c.json({ ok: true, session_card_crop: crop })
++})
++
+ app.patch('/api/collections/:id', requireAdmin, async (c) => {
+   const id = c.req.param('id')
+@@ -1490,5 +1546,5 @@ app.patch('/api/collections/:id', requireAdmin, async (c) => {
+   if (['shoot_type', 'location_type', 'related_event_id', 'session_model'].some((field) => field in body)) {
+     existing = await c.env.DB.prepare(
+-      'SELECT id, shoot_type, location_type, related_event_id, meta_json FROM collections WHERE id = ? AND deleted_at IS NULL'
++      'SELECT id, shoot_type, location_type, related_event_id FROM collections WHERE id = ? AND deleted_at IS NULL'
+     ).bind(id).first()
+     if (!existing) return c.json({ error: 'not found' }, 404)
+@@ -1506,12 +1562,13 @@ app.patch('/api/collections/:id', requireAdmin, async (c) => {
+   }
+   if ('session_model' in body) {
+-    const metadata = parseJsonObject(existing.meta_json)
+     const sessionModel = (typeFields?.shootType || existing.shoot_type) === 'session'
+       ? normalizeSessionModel(body.session_model, { deriveMemberNames: true })
+       : null
+-    if (sessionModel) metadata.session_model = sessionModel
+-    else delete metadata.session_model
+-    sets.push('meta_json = ?')
+-    vals.push(JSON.stringify(metadata))
++    if (sessionModel) {
++      sets.push(`meta_json = json_set(${collectionMetadataSql}, '$.session_model', json(?))`)
++      vals.push(JSON.stringify(sessionModel))
++    } else {
++      sets.push(`meta_json = json_remove(${collectionMetadataSql}, '$.session_model')`)
++    }
+   }
+   // 개인 세션에서 행사로 바꾸면서 relation을 생략한 경우에도 일관된 상태로 저장합니다.
+@@ -1942,4 +1999,5 @@ app.get('/', async (c) => {
+     html = html
+       .replace('href="style.css"', `href="style.css?v=${build}"`)
++      .replace('src="session-card.js"', `src="session-card.js?v=${build}"`)
+       .replace('src="app.js"', `src="app.js?v=${build}"`)
+       .replace('src="config.js"', `src="config.js?v=${build}"`)
+diff --git a/test/personal-session-cards.worker.test.js b/test/personal-session-cards.worker.test.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..15d4adea48e92829021ebef830fb6c61b4d15581
+--- /dev/null
++++ b/test/personal-session-cards.worker.test.js
+@@ -0,0 +1,64 @@
++import { describe, expect, it } from 'vitest'
++import { env, SELF } from 'cloudflare:test'
++
++async function login(password = 'test-password') {
++  const response = await SELF.fetch('https://example.com/api/login', {
++    method: 'POST',
++    headers: { 'Content-Type': 'application/json' },
++    body: JSON.stringify({ password }),
++  })
++  return { response, cookie: response.headers.get('set-cookie')?.split(';')[0] }
++}
++
++async function seedCollection({ title, published = 1, deletedAt = null, shootType = 'event', locationType = '', relatedEventId = null } = {}) {
++  const result = await env.DB.prepare(
++    `INSERT INTO collections
++       (title, description, published, deleted_at, shoot_type, location_type, related_event_id)
++     VALUES (?, ?, ?, ?, ?, ?, ?)`
++  ).bind(title || 'Collection', 'Description', published, deletedAt, shootType, locationType, relatedEventId).run()
++  return result.meta.last_row_id
++}
++
++describe('personal-session-cards', () => {
++  it('persists a manual card crop for the active session cover only', async () => {
++    const id = await seedCollection({ shootType: 'session' })
++    const first = await env.DB.prepare(
++      'INSERT INTO photos (collection_id, key_large, key_thumb, width, height) VALUES (?, ?, ?, 600, 900)'
++    ).bind(id, 'crop-l', 'crop-t').run()
++    const second = await env.DB.prepare(
++      'INSERT INTO photos (collection_id, key_large, key_thumb) VALUES (?, ?, ?)'
++    ).bind(id, 'next-l', 'next-t').run()
++    const photoId = first.meta.last_row_id
++    const base = `https://example.com/api/collections/${id}`
++    const { cookie } = await login()
++    const patch = (url, data, auth = cookie) => SELF.fetch(url, {
++      method: 'PATCH',
++      headers: { Cookie: auth, 'Content-Type': 'application/json' },
++      body: JSON.stringify(data),
++    })
++    const crop = { ratio: '1:1', x: 0.05, y: 0.2, width: 0.75, height: 0.5 }
++    const cropUrl = base + '/session-card-crop'
++    expect((await patch(base, { cover_photo_id: photoId })).status).toBe(200)
++    expect((await patch(cropUrl, { photo_id: photoId, crop }, '')).status).toBe(401)
++    expect((await patch(cropUrl, { photo_id: photoId, crop: { ...crop, x: 0.5 } })).status).toBe(400)
++    const saved = await Promise.all([
++      patch(base, { session_model: { name: '카드 테스트' } }),
++      patch(cropUrl, { photo_id: photoId, crop }),
++    ])
++    expect(saved.map((response) => response.status)).toEqual([200, 200])
++    const detail = await (await SELF.fetch(base)).json()
++    expect(detail.session_model.name).toBe('카드 테스트')
++    expect(detail.session_card_crop).toEqual({ photo_id: photoId, ...crop })
++    const getCard = async () => {
++      const list = await (await SELF.fetch('https://example.com/api/collections')).json()
++      return list.find((collection) => collection.id === id)
++    }
++    expect((await getCard()).session_card_crop).toEqual(detail.session_card_crop)
++    expect((await patch(cropUrl, { photo_id: photoId, crop: null })).status).toBe(200)
++    expect((await getCard()).session_card_crop).toBeNull()
++    expect((await patch(cropUrl, { photo_id: photoId, crop })).status).toBe(200)
++    expect((await patch(base, { cover_photo_id: second.meta.last_row_id })).status).toBe(200)
++    expect((await getCard()).session_card_crop).toBeNull()
++    expect((await patch(cropUrl, { photo_id: photoId, crop })).status).toBe(409)
++  })
++})
+diff --git a/test/session-card.node.mjs b/test/session-card.node.mjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..b3f5a5252dfe951a1f5190b6748ba2da58d467a0
+--- /dev/null
++++ b/test/session-card.node.mjs
+@@ -0,0 +1,28 @@
++import assert from 'node:assert/strict'
++import { readFileSync } from 'node:fs'
++import { runInNewContext } from 'node:vm'
++import { test } from 'node:test'
++
++const identityFunctions = readFileSync(new URL('../public/session-card.js', import.meta.url), 'utf8')
++const { sessionSubtitle, sessionCardHtml } = runInNewContext(
++  `${identityFunctions}\n({ sessionSubtitle, sessionCardHtml })`, { esc: String }
++)
++
++test('session subtitles remove only an exact, delimited series prefix and preserve source metadata', () => {
++  const identity = { series: ['체인소 맨'], character: '체인소 맨 - 레제 & 덴지' }
++  assert.equal(sessionSubtitle(identity), '체인소 맨 · 레제 & 덴지')
++  assert.equal(identity.character, '체인소 맨 - 레제 & 덴지')
++  assert.equal(sessionSubtitle({ series: ['붕괴: 스타레일'], character: '붕괴: 스타레일 — 완·매' }), '붕괴: 스타레일 · 완·매')
++  assert.equal(sessionSubtitle({ series: ['체인소 맨'], character: '체인소 맨션' }), '체인소 맨 · 체인소 맨션')
++  assert.equal(sessionSubtitle({ series: [], character: '체인소 맨 - 레제 & 덴지' }), '체인소 맨 - 레제 & 덴지')
++  assert.equal(sessionSubtitle({ series: ['체인소 맨'], character: '체인소 맨' }), '체인소 맨')
++})
++
++test('home session cards show series above character and omit empty rows', () => {
++  const render = (session_model) => sessionCardHtml({ title: 'Session', photo_count: 4, session_model }, { key: 'cover' })
++  const both = render({ name: '모델', series: ['체인소 맨'], character: '체인소 맨 - 레제 & 덴지' })
++  assert.match(both, /class="session-card-series"[^>]*>체인소 맨<\/div>\s*<div class="session-card-character"[^>]*>레제 & 덴지<\/div>/)
++  assert.doesNotMatch(render({ name: '모델', character: '레제' }), /session-card-series/)
++  assert.doesNotMatch(render({ name: '모델', series: ['체인소 맨'] }), /session-card-character/)
++  assert.doesNotMatch(render({ name: '모델' }), /session-card-subtitle/)
++})

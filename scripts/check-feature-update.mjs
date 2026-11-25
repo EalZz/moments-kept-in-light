@@ -17,7 +17,10 @@ const manifest = JSON.parse(readFileSync(resolve(moduleDir, 'manifest.json'), 'u
 const patch = resolve(moduleDir, 'update.patch')
 const content = readFileSync(patch)
 if (createHash('sha256').update(content).digest('hex') !== manifest.patchSha256) fail('패치 파일 무결성 확인 실패. ZIP을 다시 내려받으세요.')
-const allowed = new Set(['public/admin.js', 'public/admin.html', 'public/app.js', 'public/style.css', 'src/worker.js'])
+const allowed = new Set([
+  'public/admin.js', 'public/admin.html', 'public/app.js', 'public/index.html', 'public/style.css',
+  'public/session-card.js', 'public/session-rail.js', 'src/worker.js',
+])
 const declared = new Set()
 for (const item of manifest.files) {
   const path = item.path
@@ -32,7 +35,8 @@ for (const item of manifest.files) {
 const patchPaths = [...content.toString('utf8').matchAll(/^diff --git a\/(\S+) b\/(\S+)$/gm)]
 if (patchPaths.length !== declared.size || patchPaths.some(([, a, b]) => a !== b || !declared.has(a))) fail('패치 경로와 기능 설명이 일치하지 않습니다.')
 for (const guard of manifest.requiredMarkers || []) {
-  if (!readFileSync(resolve(project, guard.path), 'utf8').includes(guard.text)) fail('선행 기능이 필요합니다: ' + manifest.requires.join(', ') + '\n확인 항목: ' + guard.path)
+  const target = resolve(project, guard.path)
+  if (!existsSync(target) || !readFileSync(target, 'utf8').includes(guard.text)) fail('선행 기능이 필요합니다: ' + manifest.requires.join(', ') + '\n확인 항목: ' + guard.path)
 }
 const run = (reverse = false) => spawnSync('git', ['apply', '--check', ...(reverse ? ['--reverse'] : []), patch], { cwd: project, encoding: 'utf8' })
 const check = run()
