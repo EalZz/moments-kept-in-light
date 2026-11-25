@@ -9,10 +9,15 @@ parser.add_argument('--output', required=True)
 args = parser.parse_args()
 out = Path(args.output).resolve()
 out.mkdir(parents=True, exist_ok=True)
+modules_dir = root / 'updates/modules'
+available = {p.name: p for p in modules_dir.iterdir() if p.is_dir()}
+release = json.loads((root / 'updates/release.json').read_text())
+selected = release.get('modules', sorted(available))
+if not selected or len(set(selected)) != len(selected) or any(name not in available for name in selected):
+    raise SystemExit('Invalid release module selection')
 sums = []
-for module in sorted((root / 'updates/modules').iterdir()):
-    if not module.is_dir():
-        continue
+for name in sorted(selected):
+    module = available[name]
     manifest = json.loads((module / 'manifest.json').read_text())
     patch = (module / 'update.patch').read_bytes()
     if hashlib.sha256(patch).hexdigest() != manifest['patchSha256']:

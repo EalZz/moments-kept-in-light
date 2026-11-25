@@ -8,7 +8,10 @@ import { test } from 'node:test'
 
 const root = fileURLToPath(new URL('../../', import.meta.url))
 const base = 'c1e54c341b420e2307ae381faa7be895b4c7a265'
-const ids = ['model-display-names', 'tweet-import-select', 'gallery-layout', 'featured-photo-transition']
+const ids = [
+  'model-display-names', 'tweet-import-select', 'gallery-layout', 'featured-photo-transition',
+  'personal-session-cards', 'photo-zone-rails', 'home-section-order',
+]
 const patch = (id) => join(root, 'updates/modules', id, 'update.patch')
 const inspect = (id, project) => spawnSync(process.execPath, [join(root, 'scripts/check-feature-update.mjs'), id, project], { encoding: 'utf8' })
 function fixture(fn) {
@@ -22,9 +25,18 @@ function fixture(fn) {
 function apply(id, project, reverse = false) {
   execFileSync('git', ['apply', ...(reverse ? ['--reverse'] : []), patch(id)], { cwd: project })
 }
+const manifestOf = (id) => JSON.parse(readFileSync(join(root, 'updates/modules', id, 'manifest.json')))
+function applyPrerequisites(id, project, applied = new Set()) {
+  for (const required of manifestOf(id).requires) {
+    if (applied.has(required)) continue
+    applyPrerequisites(required, project, applied)
+    apply(required, project)
+    applied.add(required)
+  }
+}
 for (const id of ids) test(`${id}: read-only preflight, apply, detect installed, reverse`, () => fixture((project) => {
-  if (id === 'tweet-import-select') apply('model-display-names', project)
-  const manifest = JSON.parse(readFileSync(join(root, 'updates/modules', id, 'manifest.json')))
+  const manifest = manifestOf(id)
+  applyPrerequisites(id, project)
   const snapshot = () => manifest.files.map(({ path }) => existsSync(join(project, path)) ? readFileSync(join(project, path), 'utf8') : null)
   const before = snapshot()
   const check = inspect(id, project)
@@ -45,6 +57,12 @@ test('tweet package rejects a missing prerequisite without changing files', () =
   assert.match(result.stderr, /선행 기능/)
   assert.deepEqual(readFileSync(join(project, 'public/admin.js')), before)
 }))
+test('a new package reports a missing prerequisite file', () => fixture((project) => {
+  const result = inspect('home-section-order', project)
+  assert.equal(result.status, 1)
+  assert.match(result.stderr, /선행 기능/)
+  assert.equal(existsSync(join(project, 'public/session-rail.js')), false)
+}))
 test('a conflicting customization is preserved', () => fixture((project) => {
   const target = join(project, 'public/app.js')
   writeFileSync(target, '/* my custom application */\n')
@@ -62,7 +80,7 @@ test('bundle preflight refuses a tampered patch', () => fixture((project) => {
   assert.equal(result.status, 1)
   assert.match(result.stderr, /무결성/)
 }))
-test('all four updates compose and reverse in dependency order', () => fixture((project) => {
+test('all updates compose and reverse in dependency order', () => fixture((project) => {
   const files = ['public/app.js', 'public/admin.js', 'public/style.css', 'src/worker.js']
   const before = files.map((path) => readFileSync(join(project, path)))
   for (const id of ids) {

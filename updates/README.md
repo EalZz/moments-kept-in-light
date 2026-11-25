@@ -4,7 +4,7 @@
 
 원하는 기능의 설명과 ZIP만 받으세요. ZIP 안의 `CODEX.md` 요청문을 본인 프로젝트를 연 Codex에 붙여 넣으면 적용을 맡길 수 있습니다. 코드가 달라 자동 적용이 어려운 경우에도 변경 부분을 비교하는 자료로 사용할 수 있습니다.
 
-[전체 기능 종류·사용 예시](../FEATURES.md) · [기능별 ZIP 내려받기](https://github.com/EalZz/moments-kept-in-light/releases/tag/feature-updates-2026-10-26) · [처음 설치하기](../SETUP.md) · [적용·복구 안내](APPLY.md)
+[전체 기능 종류·사용 예시](../FEATURES.md) · [세션 관련 ZIP](https://github.com/EalZz/moments-kept-in-light/releases/tag/feature-updates-2026-11-25) · [기존 기능 ZIP](https://github.com/EalZz/moments-kept-in-light/releases/tag/feature-updates-2026-10-26) · [처음 설치하기](../SETUP.md) · [적용·복구 안내](APPLY.md)
 
 ## 선택 업데이트
 
@@ -14,16 +14,19 @@
 | [트윗 정보 선택 가져오기](../docs/features/tweet-import-select.md) | 가져올 정보 확인·선택, 사진 제외 가능 | 사람별 모델 표시 이름 | [ZIP](https://github.com/EalZz/moments-kept-in-light/releases/download/feature-updates-2026-10-26/tweet-import-select-1.0.0.zip) |
 | [갤러리 배치 개선](../docs/features/gallery-layout.md) | 모바일 홀수 사진·가로세로 혼합 배치, PC 중앙 정렬 | 없음 | [ZIP](https://github.com/EalZz/moments-kept-in-light/releases/download/feature-updates-2026-10-26/gallery-layout-1.0.0.zip) |
 | [메인 사진 전환 안정화](../docs/features/featured-photo-transition.md) | 다음 사진 준비 후 전환, 실패·연속 조작 처리 | 없음 | [ZIP](https://github.com/EalZz/moments-kept-in-light/releases/download/feature-updates-2026-10-26/featured-photo-transition-1.0.0.zip) |
+| [개인 세션 카드와 대표 사진 구도](../docs/features/personal-session-cards.md) | 가로형 개인 세션 카드와 PC·모바일 구도 미리보기 | 사람별 모델 표시 이름 | [ZIP](https://github.com/EalZz/moments-kept-in-light/releases/download/feature-updates-2026-11-25/personal-session-cards-1.0.0.zip) |
+| [Photo Zone과 가로 세션 카드](../docs/features/photo-zone-rails.md) | 행사 예약 촬영의 별도 갤러리와 가로 루프 | 개인 세션 카드와 대표 사진 구도 | [ZIP](https://github.com/EalZz/moments-kept-in-light/releases/download/feature-updates-2026-11-25/photo-zone-rails-1.0.0.zip) |
+| [홈 섹션 순서 드래그](../docs/features/home-section-order.md) | 세 섹션을 직접 끌어 홈 순서 지정 | Photo Zone과 가로 세션 카드 | [ZIP](https://github.com/EalZz/moments-kept-in-light/releases/download/feature-updates-2026-11-25/home-section-order-1.0.0.zip) |
 
 각 기능 이름을 누르면 기능 설명과 사용 예시가 열립니다. 해당 페이지 아래에 적용 설명서·다운로드·Codex 요청문 링크가 있습니다.
 
-트윗 선택 기능만 필요하다면 **표시 이름 → 트윗 선택** 순서로 두 묶음을 적용합니다. 갤러리나 메인 사진 전환은 선택하지 않아도 됩니다.
+트윗 선택 기능은 **사람별 모델 표시 이름 → 트윗 선택**, 세션 기능은 **사람별 모델 표시 이름 → 개인 세션 카드 → Photo Zone → 홈 섹션 순서 드래그** 순으로 필요한 단계까지 적용합니다.
 
 ## 어떤 버전에서 쓸 수 있나요?
 
-- 네 묶음은 원본 저장소의 `c1e54c3`(2026-09-19) 상태에서 적용·테스트했습니다. 트윗 묶음은 선행 기능 적용 후 검증했습니다.
+- 선택 패치는 원본 저장소 `c1e54c3` 계열에서 선행 기능을 포함해 적용을 검증했습니다.
 - 다른 버전이나 개인 수정이 있으면 포함된 검사기로 먼저 확인하세요. 검사 실패는 강제 덮어쓰기를 뜻하지 않습니다. `CODEX.md`로 차이를 비교해 적용하세요.
-- 여러 업데이트가 같은 파일을 수정할 수 있습니다. 개별 적용과 네 묶음의 결합을 검증했지만 임의의 모든 사용자 수정본까지 호환을 보장하지는 않습니다.
+- 여러 업데이트가 같은 파일을 수정할 수 있습니다. 선행 기능을 포함한 개별 적용, 7개 결합과 역순 복구를 검증했습니다. 사용자 수정본은 검사기로 먼저 확인하세요.
 - 원본 `main`의 실행 코드는 기존 기준을 유지합니다. 이 배포에서 루트 실행 코드가 최신 운영 사이트와 자동으로 같아지는 것은 아닙니다. 기능 업데이트는 선택해서 적용하세요.
 
 ## 이미 기본 제공되는 기능

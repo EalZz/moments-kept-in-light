@@ -28,6 +28,9 @@
 
 | 기능 | 할 수 있는 일 | 제공 형태 | 적용 안내 |
 |---|---|---|---|
+| [개인 세션 카드와 대표 사진 구도](docs/features/personal-session-cards.md) | 가로형 개인 세션 카드와 PC·모바일 구도 미리보기 | 선택 업데이트 | [설명서](updates/modules/personal-session-cards/README.md) · [Codex 요청문](updates/modules/personal-session-cards/CODEX.md) |
+| [Photo Zone과 가로 세션 카드](docs/features/photo-zone-rails.md) | 행사 예약 촬영의 별도 갤러리와 가로 루프 | 선택 업데이트 | [설명서](updates/modules/photo-zone-rails/README.md) · [Codex 요청문](updates/modules/photo-zone-rails/CODEX.md) |
+| [홈 섹션 순서 드래그](docs/features/home-section-order.md) | 세 섹션을 직접 끌어 홈 순서 지정 | 선택 업데이트 | [설명서](updates/modules/home-section-order/README.md) · [Codex 요청문](updates/modules/home-section-order/CODEX.md) |
 | [갤러리 배치 개선](docs/features/gallery-layout.md) | 모바일 홀수·혼합 사진 배치, 데스크톱 중앙 정렬 | 선택 업데이트 | [설명서](updates/modules/gallery-layout/README.md) · [Codex 요청문](updates/modules/gallery-layout/CODEX.md) |
 | [메인 사진 전환 안정화](docs/features/featured-photo-transition.md) | 사진 준비 후 설명과 함께 전환, 실패·연속 조작 처리 | 선택 업데이트 | [설명서](updates/modules/featured-photo-transition/README.md) · [Codex 요청문](updates/modules/featured-photo-transition/CODEX.md) |
 | [모델·작품·캐릭터 탐색과 검색](docs/features/discovery.md) | 인물·작품별 탐색, 검색 별칭, 계정 변경 연결 | 기본 포함 | — |
@@ -45,4 +48,4 @@
 - **휴대폰에서 사진 3장·5장 배치를 정돈하고 싶다** → [갤러리 배치 개선](docs/features/gallery-layout.md)
 - **메인 사진을 넘길 때 사진과 설명이 어긋난다** → [메인 사진 전환 안정화](docs/features/featured-photo-transition.md)
 
-선택 업데이트는 [릴리스 페이지](https://github.com/EalZz/moments-kept-in-light/releases/tag/feature-updates-2026-10-26)의 기능별 ZIP으로 제공합니다. 이미 배포한 ZIP의 내용은 이 문서 정리 때문에 변경하지 않습니다. [적용·복구 안내](updates/APPLY.md)도 함께 확인하세요.
+세션 기능은 **사람별 모델 표시 이름 → 개인 세션 카드 → Photo Zone → 홈 섹션 순서 드래그** 순으로 필요한 단계까지 적용합니다. [기능별 ZIP](https://github.com/EalZz/moments-kept-in-light/releases/tag/feature-updates-2026-11-25) · [적용·복구 안내](updates/APPLY.md)

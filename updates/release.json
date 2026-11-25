@@ -1,4 +1,9 @@
 {
-  "tag": "feature-updates-2026-10-26",
-  "title": "필요한 기능만 선택 업데이트 · 2026-10-26"
+  "tag": "feature-updates-2026-11-25",
+  "title": "필요한 기능만 선택 업데이트 · 2026-11-25",
+  "modules": [
+    "personal-session-cards",
+    "photo-zone-rails",
+    "home-section-order"
+  ]
 }

@@ -24,13 +24,14 @@
 
 ## 기능을 찾아보세요
 
-**[전체 기능 종류와 설명 →](FEATURES.md)** · [필요한 기능만 업데이트](updates/README.md) · [기능별 ZIP 다운로드](https://github.com/EalZz/moments-kept-in-light/releases/tag/feature-updates-2026-10-26)
+**[전체 기능 종류와 설명 →](FEATURES.md)** · [필요한 기능만 업데이트](updates/README.md) · [기능별 ZIP 다운로드](https://github.com/EalZz/moments-kept-in-light/releases/tag/feature-updates-2026-11-25)
 
 | 종류 | 기능 설명 | 제공 형태 |
 |---|---|---|
 | 촬영·사진 정리 | [행사·개인 세션](docs/features/collections.md) · [업로드·이미지 변환](docs/features/photo-upload.md) · [순서·대표 사진·공개](docs/features/gallery-management.md) | 기본 포함 |
 | 정보 가져오기 | [트윗에서 필요한 정보만 선택](docs/features/tweet-import-select.md) | 선택 업데이트 |
 | 모델·크레딧 | [계정별 모델 표시 이름](docs/features/model-display-names.md) | 선택 업데이트 |
+| 세션·홈 표시 | [개인 세션 카드와 구도 편집](docs/features/personal-session-cards.md) · [Photo Zone과 가로 카드](docs/features/photo-zone-rails.md) · [홈 섹션 순서](docs/features/home-section-order.md) | 선택 업데이트 |
 | 갤러리 표시 | [모바일·PC 사진 배치](docs/features/gallery-layout.md) · [메인 사진 전환 안정화](docs/features/featured-photo-transition.md) | 선택 업데이트 |
 | 탐색·검색 | [모델·작품·캐릭터 검색과 별칭](docs/features/discovery.md) | 기본 포함 |
 | 보관·복구 | [휴지통·백업·복구](docs/features/backup-recovery.md) | 기본 포함 |

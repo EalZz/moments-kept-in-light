@@ -1,20 +1,15 @@
-이미 배포한 Moments Kept in Light에 필요한 기능만 선택해서 적용하는 첫 업데이트 묶음입니다.
+# 개인 세션과 Photo Zone 선택 업데이트
 
-**[기능 목록과 사용 방법](https://github.com/EalZz/moments-kept-in-light/blob/main/updates/README.md)**
+[전체 기능 설명과 적용 방법](https://github.com/EalZz/moments-kept-in-light/blob/main/updates/README.md)
 
-| 필요한 기능 | 받을 파일 | 선행 기능 |
+| 새 기능 | 다운로드할 ZIP | 선행 기능 |
 |---|---|---|
-| 사람별 모델 표시 이름 | `model-display-names-1.0.0.zip` | 없음 |
-| 트윗 정보 선택 가져오기 | `tweet-import-select-1.0.0.zip` | 사람별 모델 표시 이름 |
-| 모바일/PC 갤러리 배치 | `gallery-layout-1.0.0.zip` | 없음 |
-| 메인 사진 전환 안정화 | `featured-photo-transition-1.0.0.zip` | 없음 |
+| 개인 세션 카드와 대표 사진 구도 | `personal-session-cards-1.0.0.zip` | 사람별 모델 표시 이름 |
+| Photo Zone과 가로 세션 카드 | `photo-zone-rails-1.0.0.zip` | 개인 세션 카드와 대표 사진 구도 |
+| 홈 섹션 순서 드래그 | `home-section-order-1.0.0.zip` | Photo Zone과 가로 세션 카드 |
 
-각 ZIP에 적용·검증·복구 설명서, Codex 요청문, 패치와 읽기 전용 검사기가 들어 있습니다. ZIP을 프로젝트 외부에 풀고 `CODEX.md`를 본인 프로젝트의 Codex에 붙여 넣을 수 있습니다.
+단계별로 필요한 ZIP까지 적용하세요. [앞서 배포한 네 기능 ZIP](https://github.com/EalZz/moments-kept-in-light/releases/tag/feature-updates-2026-10-26)은 이전 릴리스에서 받을 수 있습니다.
 
-트윗 선택 가져오기는 **표시 이름 → 트윗 선택** 순서로 적용하세요. 계정·장르·캐릭터만 기본 체크되며 닉네임·사진은 기본 해제됩니다.
+각 ZIP에는 사용·적용·복구 설명서, Codex 요청문, 패치와 읽기 전용 검사기가 있습니다. `c1e54c3`에서 선행 기능을 포함한 개별 적용과 7개 기능 결합·역순 복구를 검증했습니다. 기존 DB 스키마로 적용할 수 있습니다.
 
-검증 기준은 `c1e54c3` 배포 계열입니다. 개인 수정이나 다른 버전은 먼저 검사하고, 충돌하면 필요한 부분만 통합하세요. DB 마이그레이션은 없습니다. 사진·사이트 설정·비밀번호·Cloudflare 자원 설정은 패키지에 포함하지 않습니다.
-
-검증: 표시 이름 52개 API 테스트, 트윗과 선행 기능 54개 API 테스트 및 10개 Node 테스트, 갤러리 7개·사진 전환 11개 Node 테스트, 배포 묶음 검사/적용/역적용 8개 테스트 통과. 네 기능 결합 시에도 API 54개와 Node 28개 테스트 통과.
-
-이 릴리스는 기능별 코드 업데이트입니다. 아래 `Source code`는 GitHub가 자동으로 제공하는 저장소 전체 압축본이므로, 기능 하나만 필요하면 위 표의 ZIP을 선택하세요. 코드 적용 뒤 본인 Cloudflare에 배포해야 사이트에 반영됩니다.
+기능 하나를 추가할 때는 GitHub의 전체 저장소 소스 압축본 대신 해당 기능 ZIP을 사용하세요. 테스트 후 본인 Cloudflare 설정으로 배포하면 사이트에 반영됩니다.
