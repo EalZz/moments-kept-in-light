@@ -1,0 +1,1027 @@
+diff --git a/public/admin.js b/public/admin.js
+index dbdd24f4829548f0ebecafb49cad9dcefb7f7ad3..6bea9311ad0228add991f5131b32cd6625f794e1 100644
+--- a/public/admin.js
++++ b/public/admin.js
+@@ -13,5 +13,9 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (ch) =>
+ 
+ function collectionKindLabel(col) {
+-  return col?.shoot_type === 'session' ? '개인 세션' : '행사'
++  return ({ event: '행사', session: '개인 세션', photo_zone: 'Photo Zone' })[collectionListKind(col)]
++}
++function collectionListKind(col) {
++  if (col?.shoot_type !== 'session') return 'event'
++  return col.session_kind === 'photo_zone' ? 'photo_zone' : 'session'
+ }
+ function collectionLocationLabel(value) {
+@@ -258,6 +262,7 @@ async function renderCollections() {
+   ])
+   const cols = allCols.filter((c) => !c.deleted_at)
+-  const eventCols = cols.filter((c) => c.shoot_type !== 'session')
+-  const sessionCols = cols.filter((c) => c.shoot_type === 'session')
++  const eventCols = cols.filter((c) => collectionListKind(c) === 'event')
++  const sessionCols = cols.filter((c) => collectionListKind(c) === 'session')
++  const zoneCols = cols.filter((c) => collectionListKind(c) === 'photo_zone')
+   const selectedHomeOrder = homeSettings.home_section_order === 'sessions_first'
+     ? 'sessions_first'
+@@ -270,5 +275,5 @@ async function renderCollections() {
+   const lastDate = daily.at(-1)?.view_date?.slice(5).replace('-', '.') || ''
+   const collectionListPanel = (kind, list) => {
+-    const label = kind === 'session' ? '개인 세션' : '행사'
++    const label = ({ event: '행사', session: '개인 세션', photo_zone: 'Photo Zone' })[kind]
+     return `
+       <div class="panel collection-type-panel">
+@@ -276,5 +281,5 @@ async function renderCollections() {
+         <div class="collection-type-list" data-kind="${kind}">
+           ${list.map((c) => {
+-            const model = kind === 'session' ? collectionSessionModel(c) : null
++            const model = kind !== 'event' ? collectionSessionModel(c) : null
+             const modelInfo = model?.name || model?.twitter?.length
+               ? ` · ${esc(model.name || model.twitter.map((handle) => '@' + handle).join(', '))}`
+@@ -343,4 +348,5 @@ async function renderCollections() {
+           <option value="event">행사</option>
+           <option value="session">개인 세션</option>
++          <option value="photo_zone">Photo Zone</option>
+         </select>
+         <select id="newLocationType" aria-label="촬영 장소">
+@@ -365,5 +371,5 @@ async function renderCollections() {
+           <input id="newSessionModelSeries" placeholder="작품·장르 (선택)" />
+         </div>
+-        <div class="field-hint">개인 세션은 이 컬렉션 자체가 모델 세션입니다. 사진은 별도 사람 폴더 없이 개인 세션 사진에 바로 올립니다.</div>
++        <div class="field-hint">사진은 이 세션에 바로 올립니다.</div>
+       </div>
+       <div class="row">
+@@ -372,5 +378,5 @@ async function renderCollections() {
+           ${relatedEventOptions}
+         </select>
+-        <span class="field-hint">개인 세션이 행사 중 촬영이면 연결할 수 있습니다.</span>
++        <span class="field-hint">Photo Zone을 행사에 연결하면 행사 상세에도 표시됩니다.</span>
+       </div>
+       <div class="row"><input id="newDesc" placeholder="설명 (선택)" /></div>
+@@ -394,5 +400,6 @@ async function renderCollections() {
+     </div>
+     ${collectionListPanel('event', eventCols)}
+-    ${collectionListPanel('session', sessionCols)}`
++    ${collectionListPanel('session', sessionCols)}
++    ${collectionListPanel('photo_zone', zoneCols)}`
+ 
+   setupAdminMenu()
+@@ -487,5 +494,6 @@ async function renderCollections() {
+     const title = document.getElementById('newTitle').value.trim()
+     if (!title) return alert('제목을 입력하세요')
+-    const shootType = document.getElementById('newShootType').value
++    const kind = document.getElementById('newShootType').value
++    const shootType = kind === 'event' ? 'event' : 'session'
+     const { id } = await api('/collections', {
+       method: 'POST',
+@@ -495,4 +503,5 @@ async function renderCollections() {
+         description: document.getElementById('newDesc').value.trim(),
+         shoot_type: shootType,
++        session_kind: kind === 'photo_zone' ? 'photo_zone' : 'personal',
+         location_type: document.getElementById('newLocationType').value,
+         related_event_id: shootType === 'session' ? (document.getElementById('newRelatedEvent').value || null) : null,
+@@ -515,9 +524,11 @@ async function renderCollections() {
+     event: eventCols.slice(),
+     session: sessionCols.slice(),
++    photo_zone: zoneCols.slice(),
+   }
++  let savingOrder = false
+   const moveCollection = async (cid, dir) => {
+     const current = cols.find((c) => String(c.id) === String(cid))
+-    if (!current) return
+-    const kind = current.shoot_type === 'session' ? 'session' : 'event'
++    if (!current || savingOrder) return
++    const kind = collectionListKind(current)
+     const ordered = orderedByKind[kind]
+     const i = ordered.findIndex((c) => String(c.id) === String(cid))
+@@ -525,11 +536,19 @@ async function renderCollections() {
+     if (i < 0 || j < 0 || j >= ordered.length) return
+     ;[ordered[i], ordered[j]] = [ordered[j], ordered[i]]
+-    const offsets = { event: 0, session: 0 }
++    const offsets = { event: 0, session: 0, photo_zone: 0 }
+     const ids = cols.map((c) => {
+-      const currentKind = c.shoot_type === 'session' ? 'session' : 'event'
++      const currentKind = collectionListKind(c)
+       return orderedByKind[currentKind][offsets[currentKind]++].id
+     })
+-    await api('/collection-order', { method: 'PUT', json: { ids } })
+-    renderCollections()
++    savingOrder = true
++    try {
++      await api('/collection-order', { method: 'PUT', json: { ids } })
++    } catch (error) {
++      ;[ordered[i], ordered[j]] = [ordered[j], ordered[i]]
++      savingOrder = false
++      alert('컬렉션 순서 저장 실패: ' + error.message)
++      return
++    }
++    if (!location.hash || location.hash === '#/') await renderCollections()
+   }
+   app.querySelectorAll('.colUp').forEach((b) =>
+@@ -553,5 +572,5 @@ async function renderCollections() {
+   )
+   const syncNewRelation = () => {
+-    const enabled = newType.value === 'session'
++    const enabled = newType.value !== 'event'
+     relatedEvent.disabled = !enabled
+     if (!enabled) relatedEvent.value = ''
+@@ -618,5 +637,5 @@ function sectionHtml(col, group, photos) {
+   const gid = group ? group.id : ''
+   const rootModel = !group && col.shoot_type === 'session' ? collectionSessionModel(col) : null
+-  const rootLabel = group ? '📁 ' + esc(group.name) : col.shoot_type === 'session' ? '개인 세션 사진' : '행사 바로 아래'
++  const rootLabel = group ? '📁 ' + esc(group.name) : col.shoot_type === 'session' ? collectionKindLabel(col) + ' 사진' : '행사 바로 아래'
+   const rootModelInfo = rootModel && (rootModel.name || rootModel.twitter.length || rootModel.character)
+     ? ` · ${esc([rootModel.name, ...rootModel.twitter.map((handle) => '@' + handle), rootModel.character].filter(Boolean).join(' · '))}`
+@@ -683,5 +702,6 @@ async function openCollectionEditor(col) {
+           <select id="editColType" aria-label="촬영 유형">
+             <option value="event" ${col.shoot_type !== 'session' ? 'selected' : ''}>행사</option>
+-            <option value="session" ${col.shoot_type === 'session' ? 'selected' : ''}>개인 세션</option>
++            <option value="session" ${collectionListKind(col) === 'session' ? 'selected' : ''}>개인 세션</option>
++            <option value="photo_zone" ${collectionListKind(col) === 'photo_zone' ? 'selected' : ''}>Photo Zone</option>
+           </select>
+           <select id="editColLocation" aria-label="촬영 장소">
+@@ -714,5 +734,5 @@ async function openCollectionEditor(col) {
+             <input id="editSessionModelSeries" value="${esc(sessionModel.series.join(', '))}" placeholder="선택 사항" />
+           </div>
+-          <div class="field-hint">개인 세션은 이 컬렉션 자체가 모델 세션입니다. 사진은 별도 사람 폴더 없이 개인 세션 사진에 바로 올립니다.</div>
++          <div class="field-hint">사진은 이 세션에 바로 올립니다.</div>
+         </div>
+         <div class="row">
+@@ -721,5 +741,5 @@ async function openCollectionEditor(col) {
+             ${eventOptions}
+           </select>
+-          <span class="field-hint">개인 세션이 행사 중 촬영이면 연결할 수 있습니다.</span>
++          <span class="field-hint">Photo Zone을 행사에 연결하면 행사 상세에도 표시됩니다.</span>
+         </div>
+         <div class="row"><textarea id="editColDesc" placeholder="설명 (선택)">${esc(col.description || '')}</textarea></div>
+@@ -742,5 +762,5 @@ async function openCollectionEditor(col) {
+   )
+   const syncTypeFields = () => {
+-    const enabled = type.value === 'session'
++    const enabled = type.value !== 'event'
+     related.disabled = !enabled
+     if (!enabled) related.value = ''
+@@ -761,8 +781,9 @@ async function openCollectionEditor(col) {
+           date: overlay.querySelector('#editColDate').value.trim(),
+           description: overlay.querySelector('#editColDesc').value.trim(),
+-          shoot_type: type.value,
++          shoot_type: type.value === 'event' ? 'event' : 'session',
++          session_kind: type.value === 'photo_zone' ? 'photo_zone' : 'personal',
+           location_type: overlay.querySelector('#editColLocation').value,
+-          related_event_id: type.value === 'session' ? (related.value || null) : null,
+-          session_model: type.value === 'session' ? {
++          related_event_id: type.value !== 'event' ? (related.value || null) : null,
++          session_model: type.value !== 'event' ? {
+             name: overlay.querySelector('#editSessionModelName').value.trim(),
+             twitter: overlay.querySelector('#editSessionModelHandles').value.trim(),
+diff --git a/public/app.js b/public/app.js
+index 8ddfb49cace50562e2a7fdd7a05df8f7f12a7a11..59d311bd35b81a5b5a8fa6974907cd41c7b15e94 100644
+--- a/public/app.js
++++ b/public/app.js
+@@ -588,7 +588,4 @@ function shootTypeOf(c) {
+   return c?.shoot_type === 'session' ? 'session' : 'event'
+ }
+-function shootTypeLabel(c) {
+-  return shootTypeOf(c) === 'session' ? 'Personal Session' : 'Event'
+-}
+ function locationLabel(value) {
+   return ({ venue: 'Event venue', outdoor: 'Outdoor', studio: 'Studio' }[value] || '')
+@@ -598,18 +595,12 @@ function sessionAccountsHtml(identity) {
+     `<a href="https://x.com/${esc(handle)}" target="_blank" rel="noopener">@${esc(handle)} ↗</a>`).join(', ')
+ }
+-function cardHtml(c, measureOnly = false) {
+-  const type = shootTypeOf(c)
+-  const identity = type === 'session' ? sessionIdentityOf(c.title, [], c.session_model) : null
+-  const cardTitle = identity?.name || c.title
+-  const cardSubtitle = identity ? sessionSubtitle(identity) : ''
+-  const info = type === 'session'
+-    ? [locationLabel(c.location_type), `${c.photo_count} photos`].filter(Boolean).join(' · ')
+-    : [c.date, `${c.photo_count} photos`].filter(Boolean).join(' · ')
++function cardHtml(c) {
++  const info = [c.date, `${c.photo_count} photos`].filter(Boolean).join(' · ')
+   return `
+-    <a class="card card--${type}" href="#/c/${c.id}">
++    <a class="card card--event" href="#/c/${c.id}">
+       <div class="cover" ${c.cover_w && c.cover_h ? `style="aspect-ratio:${c.cover_w}/${c.cover_h}"` : ''}>
+-        ${measureOnly ? '' : `<img src="/img/${esc(c.cover_medium || c.cover_large || c.cover_thumb)}" alt="${esc(cardTitle)}" loading="lazy" data-fade />`}
++        <img src="/img/${esc(c.cover_medium || c.cover_large || c.cover_thumb)}" alt="${esc(c.title)}" loading="lazy" data-fade />
+       </div>
+-      ${type === 'event' && (c.preview_thumbs || []).length ? `<div class="strip">
++      ${(c.preview_thumbs || []).length ? `<div class="strip">
+         ${c.preview_thumbs.map((k, i) => {
+           const extra = c.photo_count - 1 - c.preview_thumbs.length
+@@ -619,7 +610,6 @@ function cardHtml(c, measureOnly = false) {
+       </div>` : ''}
+       <div class="meta">
+-        <div class="info">${esc(shootTypeLabel(c))}${info ? ` · ${esc(info)}` : ''}</div>
+-        <div class="title">${esc(cardTitle)}</div>
+-        ${cardSubtitle ? `<div class="session-subtitle">${esc(cardSubtitle)}</div>` : ''}
++        <div class="info">Event${info ? ` · ${esc(info)}` : ''}</div>
++        <div class="title">${esc(c.title)}</div>
+       </div>
+     </a>`
+@@ -627,5 +617,6 @@ function cardHtml(c, measureOnly = false) {
+ 
+ // 카드 masonry 배치: 읽는 순서(왼→오)를 지키며 가장 짧은 열에 순서대로 넣기
+-let homeCollections = { event: [], session: [] }
++let homeEvents = []
++let teardownSessionRails = null
+ function syncCollectionToggle(wrap) {
+   const button = document.querySelector('.collection-toggle[aria-controls="' + wrap.id + '"]')
+@@ -639,15 +630,7 @@ function syncCollectionToggle(wrap) {
+     ? wrap.scrollHeight > Math.ceil(foldHeight) + 8
+     : wrap.scrollHeight > Math.ceil(wrap.clientHeight) + 8
+-  const overflowing = wrap.dataset.kind === 'session'
+-    ? Number(wrap.dataset.foldCount) < wrap.children.length
+-    : hasOverflow
+-  wrap.classList.toggle('is-overflowing', overflowing)
+-  wrap.dataset.hasOverflow = String(overflowing)
+-  button.hidden = !overflowing
+-  if (wrap.dataset.kind === 'session') {
+-    Array.from(wrap.children).forEach((card, index) => {
+-      card.inert = !expanded && index >= Number(wrap.dataset.foldCount)
+-    })
+-  }
++  wrap.classList.toggle('is-overflowing', hasOverflow)
++  wrap.dataset.hasOverflow = String(hasOverflow)
++  button.hidden = !hasOverflow
+ }
+ function animateCollectionToggle(wrap, button, expanded) {
+@@ -695,16 +678,7 @@ function layoutCollections(force) {
+   document.querySelectorAll('.collections[data-kind]').forEach((wrap) => {
+     wrap._collectionAnimationCleanup?.()
+-    const kind = wrap.dataset.kind === 'session' ? 'session' : 'event'
+-    const allItems = homeCollections[kind] || []
+-    const expanded = wrap.dataset.expanded === 'true'
+-    const items = allItems
+-    wrap.classList.toggle('is-collapsed', !expanded)
+-    const n = kind === 'session'
+-      ? (innerWidth <= 620 ? 1 : 2)
+-      : (innerWidth <= 980 ? 2 : 3)
+-    if (!force && +wrap.dataset.cols === n) {
+-      if (kind === 'session') updateSessionFold(wrap)
+-      return
+-    }
++    wrap.classList.toggle('is-collapsed', wrap.dataset.expanded !== 'true')
++    const n = innerWidth <= 980 ? 2 : 3
++    if (!force && +wrap.dataset.cols === n) return
+     wrap.dataset.cols = n
+     const heights = Array(n).fill(0)
+@@ -714,45 +688,16 @@ function layoutCollections(force) {
+       return d
+     })
+-    for (const c of items) {
++    for (const c of homeEvents) {
+       const i = heights.indexOf(Math.min(...heights))
+-      colEls[i].insertAdjacentHTML('beforeend', cardHtml(c, kind === 'session'))
++      colEls[i].insertAdjacentHTML('beforeend', cardHtml(c))
+       // 카드 높이 추정 (열 폭 기준 비율): 커버 + 행사 썸네일 스트립 + 텍스트
+       const coverH = c.cover_w && c.cover_h ? c.cover_h / c.cover_w : 0.75
+-      heights[i] += coverH + (kind === 'event' && (c.preview_thumbs || []).length ? 0.36 : 0) + 0.28
+-    }
+-    if (kind === 'session') {
+-      // 기존 2열 카드가 접힘 경계 안에 몇 장 들어왔는지 실제 스타일로 계산합니다.
+-      const measure = document.createElement('div')
+-      measure.className = 'collections session-fold-measure'
+-      measure.inert = true
+-      measure.replaceChildren(...colEls)
+-      wrap.after(measure)
+-      wrap.innerHTML = items.map((c) => sessionCardHtml(c, {
+-        key: c.cover_medium || c.cover_large || c.cover_thumb,
+-        width: c.cover_w, height: c.cover_h, crop: c.session_card_crop,
+-        href: '#/c/' + c.id,
+-      })).join('')
+-      updateSessionFold(wrap)
+-    } else {
+-      wrap.replaceChildren(...colEls)
+-      syncCollectionToggle(wrap)
++      heights[i] += coverH + ((c.preview_thumbs || []).length ? 0.36 : 0) + 0.28
+     }
++    wrap.replaceChildren(...colEls)
++    syncCollectionToggle(wrap)
+   })
+   markLoadedImages()
+ }
+-function updateSessionFold(wrap) {
+-  const measure = wrap.nextElementSibling
+-  const limit = parseFloat(getComputedStyle(measure).getPropertyValue('--collection-fold-y'))
+-  const measureTop = measure.getBoundingClientRect().top
+-  const count = Array.from(measure.querySelectorAll('.card'))
+-    .filter((card) => card.getBoundingClientRect().top - measureTop < limit).length
+-  wrap.dataset.foldCount = String(count)
+-  const last = wrap.children[count - 1]
+-  if (last) {
+-    const height = last.getBoundingClientRect().bottom - wrap.getBoundingClientRect().top
+-    wrap.style.setProperty('--collection-fold-y', `${Math.ceil(height)}px`)
+-  }
+-  syncCollectionToggle(wrap)
+-}
+ window.addEventListener('resize', () => layoutCollections(false))
+ 
+@@ -762,5 +707,6 @@ async function renderHome() {
+   const collectionsByType = {
+     event: visible.filter((c) => shootTypeOf(c) === 'event'),
+-    session: visible.filter((c) => shootTypeOf(c) === 'session'),
++    session: visible.filter((c) => shootTypeOf(c) === 'session' && c.session_kind !== 'photo_zone'),
++    photo_zone: visible.filter((c) => shootTypeOf(c) === 'session' && c.session_kind === 'photo_zone'),
+   }
+   // 관리자가 지정한 컬렉션이 있으면 그 컬렉션 고정, 없으면 전체 사진 랜덤 순환
+@@ -817,7 +763,7 @@ async function renderHome() {
+ 
+   const sectionOrder = settings.home_section_order === 'sessions_first'
+-    ? ['session', 'event']
+-    : ['event', 'session']
+-  const sectionTitles = { event: 'Events', session: 'Personal Sessions' }
++    ? ['session', 'photo_zone', 'event']
++    : ['event', 'session', 'photo_zone']
++  const sectionTitles = { event: 'Events', session: 'Personal Sessions', photo_zone: 'Photo Zone' }
+   const collectionSections = sectionOrder.map((kind) => {
+     const items = collectionsByType[kind]
+@@ -828,14 +774,21 @@ async function renderHome() {
+         <div class="collection-block-head">
+           <div class="collection-block-title">
+-            <h3>${sectionTitles[kind]}</h3>
++            <h3 id="${listId}-title">${sectionTitles[kind]}</h3>
+             <div class="date">${items.length} collections</div>
+           </div>
+         </div>
+-        <div class="collection-list-shell">
+-          <div id="${listId}" class="collections is-collapsed" data-kind="${kind}" data-expanded="false"></div>
++        ${kind === 'event' ? `<div class="collection-list-shell">
++          <div id="${listId}" class="collections is-collapsed" data-kind="event" data-expanded="false"></div>
+           ${'<button type="button" class="collection-toggle" aria-label="컬렉션 더보기" title="더보기" aria-controls="' + listId + '" aria-expanded="false" hidden>' +
+             '<span class="collection-toggle-arrow" aria-hidden="true">↓</span>' +
+           '</button>'}
+-        </div>
++        </div>` : `
++          <div id="${listId}" class="session-rail" role="region" aria-labelledby="${listId}-title">
++            ${items.map((c) => sessionCardHtml(c, {
++              key: c.cover_medium || c.cover_large || c.cover_thumb,
++              width: c.cover_w, height: c.cover_h, crop: c.session_card_crop,
++              href: '#/c/' + c.id,
++            })).join('')}
++          </div>`}
+       </section>`
+   }).join('')
+@@ -864,28 +817,11 @@ async function renderHome() {
+ 
+   main.innerHTML = hero + '<div class="below-hero">' + cover + grid + teaser + '</div>'
+-  homeCollections = collectionsByType
++  homeEvents = collectionsByType.event
+   layoutCollections(true)
+-  if (document.fonts && collectionsByType.session.length) {
+-    const sessions = document.getElementById('collections-session')
+-    void document.fonts.ready.then(() => {
+-      if (sessions.isConnected && sessions.dataset.expanded !== 'true') updateSessionFold(sessions)
+-    })
+-  }
++  teardownSessionRails = mountSessionRails(main.querySelectorAll('.session-rail'))
+   main.querySelectorAll('.collection-toggle').forEach((button) => {
+     button.addEventListener('click', () => {
+       const wrap = document.getElementById(button.getAttribute('aria-controls'))
+-      if (!wrap) return
+-      const expanded = wrap.dataset.expanded !== 'true'
+-      if (wrap.dataset.kind === 'session') {
+-        wrap.dataset.expanded = String(expanded)
+-        wrap.classList.toggle('is-collapsed', !expanded)
+-        button.setAttribute('aria-expanded', String(expanded))
+-        button.setAttribute('aria-label', expanded ? '컬렉션 접기' : '컬렉션 더보기')
+-        button.title = expanded ? '접기' : '더보기'
+-        button.querySelector('.collection-toggle-arrow').textContent = expanded ? '↑' : '↓'
+-        syncCollectionToggle(wrap)
+-      } else {
+-        animateCollectionToggle(wrap, button, expanded)
+-      }
++      if (wrap) animateCollectionToggle(wrap, button, wrap.dataset.expanded !== 'true')
+     })
+   })
+@@ -1028,8 +964,9 @@ async function renderCollection(id, focusGroup = null) {
+       ? `<a class="related-event" href="#/c/${col.related_event_id}">From Events · ${esc(col.related_event_title)}${col.related_event_date ? ` · ${esc(col.related_event_date)}` : ''} →</a>`
+       : ''
++    const label = col.session_kind === 'photo_zone' ? 'Photo Zone' : 'Personal Sessions'
+     main.innerHTML = `
+       <div class="col-head session-head">
+-        <a class="back" href="#/">← Personal Sessions</a>
+-        <div class="shoot-kind">Personal Session</div>
++        <a class="back" href="#/" data-scroll="${col.session_kind === 'photo_zone' ? '#collections-photo_zone-title' : '#collections-session-title'}">← ${label}</a>
++        <div class="shoot-kind">${col.session_kind === 'photo_zone' ? label : 'Personal Session'}</div>
+         <h2>${esc(title)}</h2>
+         ${subtitle ? `<div class="session-identity-subtitle">${esc(subtitle)}</div>` : ''}
+@@ -1043,4 +980,9 @@ async function renderCollection(id, focusGroup = null) {
+         <button type="button" class="share-collection" aria-label="세션 공유 링크 복사">이 세션 공유 ↗</button>
+       </div>` : ''}`
++    main.querySelector('.session-head .back')?.addEventListener('click', (event) => {
++      event.preventDefault()
++      pendingScroll = event.currentTarget.dataset.scroll
++      location.hash = '#/'
++    })
+     main.querySelector('.share-collection')?.addEventListener('click', async (ev) => {
+       const shareUrl = `${location.origin}/share/collection/${encodeURIComponent(id)}`
+@@ -1104,4 +1046,9 @@ async function renderCollection(id, focusGroup = null) {
+       </div>` : ''}
+     </div>
++    ${(col.related_photo_zones || []).length ? `
++      <section class="related-photo-zone">
++        <h3>Photo Zone</h3>
++        <ul>${col.related_photo_zones.map((session) => `<li><a href="#/c/${session.id}">${esc(session.title)} →</a></li>`).join('')}</ul>
++      </section>` : ''}
+     ${!col.photos.length ? '<div class="empty">사진이 없습니다</div>' : ''}
+     ${viewMode === 'all'
+@@ -1641,4 +1588,6 @@ async function renderAbout() {
+ // ---------- router ----------
+ async function route() {
++  teardownSessionRails?.()
++  teardownSessionRails = null
+   if (featureTimer) { clearInterval(featureTimer); featureTimer = null }
+   jSets = null
+diff --git a/public/index.html b/public/index.html
+index b0d5cecd53548f9439faed143f3080aca39198cc..039016bff26b6fdd70c97f2a4c2953ad62581647 100644
+--- a/public/index.html
++++ b/public/index.html
+@@ -73,4 +73,5 @@
+   <script src="config.js"></script>
+   <script src="session-card.js"></script>
++  <script src="session-rail.js"></script>
+   <script src="app.js"></script>
+ </body>
+diff --git a/public/session-rail.js b/public/session-rail.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..3f9a53eaf64f6711ace99b5fa52e401f29b95e47
+--- /dev/null
++++ b/public/session-rail.js
+@@ -0,0 +1,246 @@
++function sessionRailModulo(position, cycle) {
++  return ((position % cycle) + cycle) % cycle
++}
++
++function sessionRailIndex(position, step) {
++  return Math.round(position / step - 0.001)
++}
++
++function mountSessionRails(elements) {
++  const rails = Array.from(elements)
++  if (!rails.length) return null
++  const controller = new AbortController()
++  const { signal } = controller
++  const mobile = matchMedia('(max-width: 620px)')
++  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)')
++  let frame = 0
++  let lastFrame = 0
++  let viewportWidth = document.body.clientWidth
++
++  const states = rails.map((rail) => {
++    const cards = Array.from(rail.children)
++    const section = rail.parentElement
++    const track = document.createElement('div')
++    track.className = 'session-rail-track'
++    track.append(...cards)
++    rail.append(track)
++    const state = {
++      rail, track, cards, section, overflow: false, hovered: false, gesture: null,
++      inView: false, position: 0, center: 0, step: 1, snap: null,
++      wheelAt: -Infinity, suppressClickUntil: 0, copies: [],
++    }
++
++    function snap(index, immediate = false) {
++      const target = index * state.step
++      if (immediate || reducedMotion.matches) {
++        state.snap = null
++        state.position = sessionRailModulo(target, state.step * cards.length)
++        paint(state)
++      } else {
++        state.snap = { from: state.position, to: target, start: performance.now() }
++        queueAnimation()
++      }
++    }
++    function currentIndex() {
++      return sessionRailIndex(state.snap?.to ?? state.position, state.step)
++    }
++
++    rail.addEventListener('pointerenter', (event) => {
++      if (event.pointerType === 'mouse') state.hovered = true
++    }, { signal })
++    rail.addEventListener('pointerleave', (event) => {
++      if (event.pointerType === 'mouse') state.hovered = false
++    }, { signal })
++    rail.addEventListener('wheel', (event) => {
++      if (!state.overflow || !state.hovered || event.ctrlKey || !event.cancelable) return
++      const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY
++      if (!delta) return
++      const now = performance.now()
++      if (now - state.wheelAt > 150) snap(currentIndex() + Math.sign(delta))
++      state.wheelAt = now
++      event.preventDefault()
++    }, { signal, passive: false })
++
++    rail.addEventListener('pointerdown', (event) => {
++      if (event.pointerType === 'mouse' || !state.overflow || state.gesture || !event.isPrimary) return
++      state.snap = null
++      state.gesture = {
++        id: event.pointerId, x: event.clientX, y: event.clientY,
++        start: state.position, index: currentIndex(), dragging: false,
++      }
++    }, { signal })
++    rail.addEventListener('pointermove', (event) => {
++      const gesture = state.gesture
++      if (gesture?.id !== event.pointerId) return
++      const dx = event.clientX - gesture.x
++      const dy = event.clientY - gesture.y
++      if (!gesture.dragging && Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy)) {
++        gesture.dragging = true
++        rail.setPointerCapture(event.pointerId)
++      }
++      if (gesture.dragging) {
++        state.position = gesture.start - dx
++        paint(state)
++      }
++    }, { signal })
++    function finishGesture(event) {
++      const gesture = state.gesture
++      if (gesture?.id !== event.pointerId) return
++      state.gesture = null
++      if (!gesture.dragging) return
++      const dx = event.clientX - gesture.x
++      const moveThreshold = Math.min(42, state.step * 0.15)
++      const direction = event.type === 'pointerup' && Math.abs(dx) >= moveThreshold ? -Math.sign(dx) : 0
++      state.suppressClickUntil = performance.now() + 500
++      snap(gesture.index + direction)
++    }
++    rail.addEventListener('pointerup', finishGesture, { signal })
++    rail.addEventListener('pointercancel', finishGesture, { signal })
++    rail.addEventListener('lostpointercapture', (event) => {
++      if (event.target === rail) finishGesture(event)
++    }, { signal })
++    rail.addEventListener('click', (event) => {
++      if (event.detail && performance.now() < state.suppressClickUntil) {
++        event.preventDefault()
++        event.stopPropagation()
++      }
++    }, { signal, capture: true })
++
++    rail.addEventListener('keydown', (event) => {
++      if (!state.overflow || !['ArrowLeft', 'ArrowRight'].includes(event.key)) return
++      event.preventDefault()
++      const index = currentIndex() + (event.key === 'ArrowLeft' ? -1 : 1)
++      snap(index)
++      cards[sessionRailModulo(index, cards.length)].focus({ preventScroll: true })
++    }, { signal })
++    rail.addEventListener('focusin', (event) => {
++      if (!state.overflow || !event.target.matches(':focus-visible')) return
++      const index = cards.indexOf(event.target)
++      if (index < 0) return
++      const current = currentIndex()
++      if (state.snap && sessionRailModulo(current, cards.length) === index) return
++      snap(index + Math.round((current - index) / cards.length) * cards.length, true)
++    }, { signal })
++    return state
++  })
++
++  function paint(state) {
++    const cycle = state.cards.length * state.step
++    const offset = state.center - cycle - sessionRailModulo(state.position, cycle)
++    state.track.style.transform = `translate3d(${offset}px, 0, 0)`
++  }
++
++  function layout(state) {
++    const { rail, track, section, cards } = state
++    const contentWidth = section.clientWidth
++    if (!contentWidth) return
++    const wasOverflowing = state.overflow
++    const position = state.position / state.step
++    state.overflow = cards.length > (mobile.matches ? 1 : 2)
++    rail.classList.toggle('is-scrollable', state.overflow)
++    rail.style.setProperty('--rail-content-width', contentWidth + 'px')
++    const margin = Math.max(0, (viewportWidth - contentWidth) / 2)
++    rail.style.setProperty('--rail-margin', margin + 'px')
++    rail.style.setProperty('--rail-width', viewportWidth + 'px')
++    state.snap = null
++    state.gesture = null
++    if (!state.overflow) {
++      for (const copy of state.copies) copy.remove()
++      state.copies = []
++      track.style.removeProperty('transform')
++      return
++    }
++    if (!wasOverflowing) {
++      // 앞뒤로 같은 순서를 배치해 주기가 바뀌는 순간에도 화면이 이어집니다.
++      const copyCards = () => cards.map((card) => {
++        const copy = card.cloneNode(true)
++        copy.setAttribute('aria-hidden', 'true')
++        copy.tabIndex = -1
++        return copy
++      })
++      const before = copyCards()
++      const after = copyCards()
++      state.copies = [...before, ...after]
++      track.prepend(...before)
++      track.append(...after)
++    }
++    const first = cards[0].getBoundingClientRect()
++    state.step = cards[1].getBoundingClientRect().left - first.left || 1
++    state.center = (rail.clientWidth - first.width) / 2
++    state.position = wasOverflowing ? position * state.step : state.center - margin
++    paint(state)
++  }
++
++  const resize = new ResizeObserver((entries) => {
++    const width = document.body.clientWidth
++    if (width !== viewportWidth) {
++      viewportWidth = width
++      states.forEach(layout)
++    } else {
++      for (const state of states) {
++        if (entries.some((entry) => entry.target === state.section)) layout(state)
++      }
++    }
++    queueAnimation()
++  })
++  resize.observe(document.body)
++  const visibility = new IntersectionObserver((entries) => {
++    for (const entry of entries) states.find((state) => state.rail === entry.target).inView = entry.isIntersecting
++    queueAnimation()
++  })
++  for (const state of states) {
++    layout(state)
++    resize.observe(state.section)
++    visibility.observe(state.rail)
++  }
++  window.addEventListener('resize', () => {
++    viewportWidth = document.body.clientWidth
++    states.forEach(layout)
++    queueAnimation()
++  }, { signal })
++
++  function queueAnimation() {
++    if (!frame && states.some((state) => state.inView && state.overflow)) {
++      lastFrame = 0
++      frame = requestAnimationFrame(tick)
++    }
++  }
++  function tick(now) {
++    frame = 0
++    const visible = states.filter((state) => state.inView && state.overflow)
++    if (!visible.length) return
++    const elapsed = Math.min(40, now - (lastFrame || now))
++    lastFrame = now
++    const snapping = visible.some((state) => state.snap)
++    let active = null
++    let distance = Infinity
++    for (const state of visible) {
++      if (state.snap) {
++        const progress = Math.max(0, Math.min(1, (now - state.snap.start) / 380))
++        const ease = 1 - (1 - progress) ** 3
++        state.position = state.snap.from + (state.snap.to - state.snap.from) * ease
++        if (progress === 1) {
++          state.snap = null
++          state.position = sessionRailModulo(state.position, state.step * state.cards.length)
++        }
++        paint(state)
++        continue
++      }
++      const { top, height } = state.rail.getBoundingClientRect()
++      const fromCenter = Math.abs(top + height / 2 - innerHeight / 2)
++      if (fromCenter < distance) { active = state; distance = fromCenter }
++    }
++    if (active && !snapping && !active.hovered && !active.gesture && !document.hidden && !reducedMotion.matches &&
++        !document.body.classList.contains('intro-on') && !active.rail.querySelector(':focus-visible')) {
++      active.position = sessionRailModulo(active.position + elapsed * 0.022, active.step * active.cards.length)
++      paint(active)
++    }
++    frame = requestAnimationFrame(tick)
++  }
++  return () => {
++    controller.abort()
++    resize.disconnect()
++    visibility.disconnect()
++    cancelAnimationFrame(frame)
++  }
++}
+diff --git a/public/style.css b/public/style.css
+index 7dab593740960c6c3bd8ab7734a3db76a566b943..48cae00e875d1e9bf36380092de7648fffe87a42 100644
+--- a/public/style.css
++++ b/public/style.css
+@@ -1112,12 +1112,4 @@ main.wrap { padding-top: 76px; }
+ }
+ .card:hover .meta .title { background-size: 100% 1px; }
+-.card .session-subtitle {
+-  margin-top: 8px;
+-  color: var(--fg-faint);
+-  font-size: 12px;
+-  letter-spacing: 0.08em;
+-  line-height: 1.35;
+-}
+-
+ /* 홈 컬렉션 분류 — 행사와 개인 세션을 같은 목록 안에서 섞지 않음 */
+ .collection-index .col-head { padding-bottom: 42px; }
+@@ -1277,7 +1269,4 @@ main.wrap { padding-top: 76px; }
+   transform: translateY(2px);
+ }
+-.collection-block--session .collections { gap: 34px; }
+-.collection-block--session .collections .mcol { gap: 52px; }
+-.card--session .meta { padding-top: 18px; }
+ 
+ @media (max-width: 620px) {
+@@ -1298,5 +1287,4 @@ main.wrap { padding-top: 76px; }
+   .collection-block-title .date { margin-top: 5px; }
+   .collection-toggle { bottom: 22px; width: 64px; height: 64px; font-size: 9px; }
+-  .collection-block--session .collections .mcol { gap: 36px; }
+ }
+ 
+@@ -1307,30 +1295,33 @@ main.wrap { padding-top: 76px; }
+ }
+ 
+-.collection-block .session-fold-measure {
+-  position: absolute;
+-  inset: 0 0 auto;
+-  height: 0;
+-  padding: 0;
+-  overflow: hidden;
+-  visibility: hidden;
++.session-rail {
++  --rail-gap: 24px;
++  --rail-content-width: 100%;
++  --rail-card-width: calc((var(--rail-content-width) - var(--rail-gap)) / 2);
+ }
+-.collection-block .session-fold-measure .cover { position: relative; }
+-.collection-block .collections[data-kind="session"] {
+-  display: grid;
+-  grid-template-columns: repeat(2, minmax(0, 1fr));
+-  gap: 24px;
+-  padding-bottom: 0;
+-  transition: none;
++.session-rail-track {
++  display: flex;
++  justify-content: center;
++  gap: var(--rail-gap);
+ }
+-.collection-block .collections[data-kind="session"]::before,
+-.collection-block .collections[data-kind="session"]::after { display: none; }
+-.collections[data-kind="session"] > [inert] { visibility: hidden; }
+-.collection-block--session .collection-toggle:not([hidden]) {
+-  position: static;
+-  transform: none;
+-  margin: 8px auto 0;
+-  width: 60px;
+-  height: 52px;
++.session-rail-track > .session-card { flex: 0 0 var(--rail-card-width); }
++.session-rail.is-scrollable {
++  position: relative;
++  width: var(--rail-width);
++  margin-inline: calc((100% - var(--rail-width)) / 2);
++  overflow: clip;
++  scrollbar-width: none;
++  touch-action: pan-y pinch-zoom;
++  mask-image: linear-gradient(
++    to right, transparent, #000 var(--rail-margin),
++    #000 calc(100% - var(--rail-margin)), transparent
++  );
++}
++.session-rail.is-scrollable .session-rail-track {
++  justify-content: flex-start;
++  will-change: transform;
+ }
++.session-rail.is-scrollable img { user-select: none; -webkit-user-drag: none; }
++
+ .session-card {
+   --session-card-ratio: 1.5;
+@@ -1453,10 +1444,33 @@ a.session-card:focus-visible::after { border-color: rgba(255, 255, 255, .65); }
+ }
+ @media (max-width: 620px) {
+-  .collection-block .collections[data-kind="session"] {
+-    grid-template-columns: minmax(0, 1fr);
+-    gap: 14px;
++  .session-rail {
++    --rail-gap: 14px;
++    --rail-card-width: var(--rail-content-width);
++  }
++  .session-rail.is-scrollable {
++    --rail-card-width: calc(var(--rail-content-width) - var(--rail-gap) - 20px);
+   }
+-  .collections[data-kind="session"] .session-card { --session-card-ratio: var(--session-mobile-ratio); }
++  .session-rail .session-card { --session-card-ratio: var(--session-mobile-ratio); }
++}
++
++.related-photo-zone {
++  margin-bottom: 32px;
++  padding: 14px 0;
++  border-block: 1px solid var(--border);
++}
++.related-photo-zone h3 {
++  font-family: var(--font-display);
++  font-size: 21px;
++  font-weight: 500;
++}
++.related-photo-zone ul {
++  display: flex;
++  flex-wrap: wrap;
++  gap: 6px 20px;
++  margin-top: 6px;
++  list-style: none;
+ }
++.related-photo-zone a { font-size: 13px; color: var(--fg-dim); }
++.related-photo-zone a:hover, .related-photo-zone a:focus-visible { color: var(--fg); }
+ 
+ .session-crop-editor {
+diff --git a/src/worker.js b/src/worker.js
+index f331bf95eba14923cc63e2e16cd21bc3dcd70e2d..97e7885dbdda8ea04de86993dcbe451983d7d750 100644
+--- a/src/worker.js
++++ b/src/worker.js
+@@ -76,4 +76,13 @@ function sessionModelOf(meta) {
+ }
+ 
++function sessionKindOf(meta) {
++  return meta.session_kind === 'photo_zone' ? 'photo_zone' : 'personal'
++}
++
++function validSessionKind(body, shootType) {
++  return !('session_kind' in body) || body.session_kind === 'personal' ||
++    (body.session_kind === 'photo_zone' && shootType === 'session')
++}
++
+ function normalizeSessionCardCrop(value) {
+   if (!value || !Number.isSafeInteger(value.photo_id) || value.photo_id < 1 ||
+@@ -377,5 +386,5 @@ app.get('/api/collections', async (c) => {
+      FROM collections col
+      LEFT JOIN collections related ON related.id = col.related_event_id
+-       AND related.deleted_at IS NULL AND related.shoot_type = 'event'
++       AND related.deleted_at IS NULL AND related.shoot_type = 'event'${includeDrafts ? '' : ' AND related.published = 1'}
+      LEFT JOIN photos p ON p.id = col.cover_photo_id AND p.deleted_at IS NULL
+      WHERE ${visibility}
+@@ -400,4 +409,5 @@ app.get('/api/collections', async (c) => {
+     if (r.shoot_type === 'session') {
+       const meta = parseJsonObject(r.meta_json)
++      r.session_kind = sessionKindOf(meta)
+       r.session_model = addResolvedSessionMemberNames(
+         sessionModelOf(meta),
+@@ -442,12 +452,16 @@ app.post('/api/collections', requireAdmin, async (c) => {
+   const typeFields = await collectionTypeFields(c.env.DB, body)
+   if (typeFields.error) return c.json({ error: typeFields.error }, 400)
++  if (!validSessionKind(body, typeFields.shootType)) return c.json({ error: 'invalid session_kind' }, 400)
+   const sessionModel = typeFields.shootType === 'session'
+     ? normalizeSessionModel(body.session_model, { deriveMemberNames: true })
+     : null
++  const metadata = {}
++  if (sessionModel) metadata.session_model = sessionModel
++  if (body.session_kind === 'photo_zone') metadata.session_kind = 'photo_zone'
+   const { meta } = await c.env.DB.prepare(
+     `INSERT INTO collections
+        (title, date, description, meta_json, published, shoot_type, location_type, related_event_id)
+      VALUES (?, ?, ?, ?, 0, ?, ?, ?)`
+-  ).bind(title, date, description, JSON.stringify(sessionModel ? { session_model: sessionModel } : {}), typeFields.shootType, typeFields.locationType, typeFields.relatedEventId).run()
++  ).bind(title, date, description, JSON.stringify(metadata), typeFields.shootType, typeFields.locationType, typeFields.relatedEventId).run()
+   return c.json({ id: meta.last_row_id })
+ })
+@@ -460,5 +474,5 @@ app.get('/api/collections/:id', async (c) => {
+      FROM collections col
+      LEFT JOIN collections related ON related.id = col.related_event_id
+-       AND related.deleted_at IS NULL AND related.shoot_type = 'event'
++       AND related.deleted_at IS NULL AND related.shoot_type = 'event'${includeDrafts ? '' : ' AND related.published = 1'}
+      WHERE col.id = ? AND col.deleted_at IS NULL${includeDrafts ? '' : ' AND col.published = 1'}`
+   ).bind(id).first()
+@@ -478,4 +492,16 @@ app.get('/api/collections/:id', async (c) => {
+   const modelNames = Object.fromEntries(modelNameRows.map((row) => [row.handle.toLowerCase(), row.name]))
+   const meta = parseJsonObject(col.meta_json)
++  if (col.shoot_type === 'session') col.session_kind = sessionKindOf(meta)
++  if (col.shoot_type === 'event') {
++    const { results } = await c.env.DB.prepare(
++      `SELECT id, title FROM collections AS session
++       WHERE shoot_type = 'session' AND related_event_id = ? AND deleted_at IS NULL
++         ${includeDrafts ? '' : 'AND published = 1'}
++         AND CASE WHEN json_valid(meta_json) THEN json_extract(meta_json, '$.session_kind') = 'photo_zone' ELSE 0 END
++         AND EXISTS (SELECT 1 FROM photos WHERE collection_id = session.id AND deleted_at IS NULL)
++       ORDER BY (sort_order IS NOT NULL), sort_order, date DESC, id ASC`
++    ).bind(id).all()
++    col.related_photo_zones = results
++  }
+   col.session_model = addResolvedSessionMemberNames(
+     sessionModelOf(meta),
+@@ -1544,5 +1570,5 @@ app.patch('/api/collections/:id', requireAdmin, async (c) => {
+   let typeFields = null
+   let existing = null
+-  if (['shoot_type', 'location_type', 'related_event_id', 'session_model'].some((field) => field in body)) {
++  if (['shoot_type', 'location_type', 'related_event_id', 'session_model', 'session_kind'].some((field) => field in body)) {
+     existing = await c.env.DB.prepare(
+       'SELECT id, shoot_type, location_type, related_event_id FROM collections WHERE id = ? AND deleted_at IS NULL'
+@@ -1551,4 +1577,5 @@ app.patch('/api/collections/:id', requireAdmin, async (c) => {
+     typeFields = await collectionTypeFields(c.env.DB, body, existing, id)
+     if (typeFields.error) return c.json({ error: typeFields.error }, 400)
++    if (!validSessionKind(body, typeFields.shootType)) return c.json({ error: 'invalid session_kind' }, 400)
+   }
+   const fields = ['title', 'date', 'description', 'cover_photo_id', 'published', 'shoot_type', 'location_type', 'related_event_id']
+@@ -1561,4 +1588,5 @@ app.patch('/api/collections/:id', requireAdmin, async (c) => {
+     }
+   }
++  let metadataSql = collectionMetadataSql
+   if ('session_model' in body) {
+     const sessionModel = (typeFields?.shootType || existing.shoot_type) === 'session'
+@@ -1566,10 +1594,16 @@ app.patch('/api/collections/:id', requireAdmin, async (c) => {
+       : null
+     if (sessionModel) {
+-      sets.push(`meta_json = json_set(${collectionMetadataSql}, '$.session_model', json(?))`)
++      metadataSql = `json_set(${metadataSql}, '$.session_model', json(?))`
+       vals.push(JSON.stringify(sessionModel))
+     } else {
+-      sets.push(`meta_json = json_remove(${collectionMetadataSql}, '$.session_model')`)
++      metadataSql = `json_remove(${metadataSql}, '$.session_model')`
+     }
+   }
++  if ('session_kind' in body || body.shoot_type === 'event') {
++    metadataSql = body.session_kind === 'photo_zone'
++      ? `json_set(${metadataSql}, '$.session_kind', 'photo_zone')`
++      : `json_remove(${metadataSql}, '$.session_kind')`
++  }
++  if (metadataSql !== collectionMetadataSql) sets.push(`meta_json = ${metadataSql}`)
+   // 개인 세션에서 행사로 바꾸면서 relation을 생략한 경우에도 일관된 상태로 저장합니다.
+   if (typeFields && body.shoot_type === 'event' && !('related_event_id' in body)) {
+@@ -2000,4 +2034,5 @@ app.get('/', async (c) => {
+       .replace('href="style.css"', `href="style.css?v=${build}"`)
+       .replace('src="session-card.js"', `src="session-card.js?v=${build}"`)
++      .replace('src="session-rail.js"', `src="session-rail.js?v=${build}"`)
+       .replace('src="app.js"', `src="app.js?v=${build}"`)
+       .replace('src="config.js"', `src="config.js?v=${build}"`)
+diff --git a/test/photo-zone-rails.worker.test.js b/test/photo-zone-rails.worker.test.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..abe8f390690de24e3be80c6d40acc836a152778f
+--- /dev/null
++++ b/test/photo-zone-rails.worker.test.js
+@@ -0,0 +1,59 @@
++import { describe, expect, it } from 'vitest'
++import { env, SELF } from 'cloudflare:test'
++
++async function login(password = 'test-password') {
++  const response = await SELF.fetch('https://example.com/api/login', {
++    method: 'POST',
++    headers: { 'Content-Type': 'application/json' },
++    body: JSON.stringify({ password }),
++  })
++  return { response, cookie: response.headers.get('set-cookie')?.split(';')[0] }
++}
++
++async function seedCollection({ title, published = 1, deletedAt = null, shootType = 'event', locationType = '', relatedEventId = null } = {}) {
++  const result = await env.DB.prepare(
++    `INSERT INTO collections
++       (title, description, published, deleted_at, shoot_type, location_type, related_event_id)
++     VALUES (?, ?, ?, ?, ?, ?, ?)`
++  ).bind(title || 'Collection', 'Description', published, deletedAt, shootType, locationType, relatedEventId).run()
++  return result.meta.last_row_id
++}
++
++describe('photo-zone-rails', () => {
++  it('classifies Photo Zone as a session and lists only public, non-empty linked shoots for an event', async () => {
++    const eventId = await seedCollection({ title: 'Event' })
++    const personalId = await seedCollection({ title: 'Personal', shootType: 'session', relatedEventId: eventId })
++    const { cookie } = await login()
++    const headers = { Cookie: cookie, 'Content-Type': 'application/json' }
++    const create = (title, shootType = 'session') => SELF.fetch('https://example.com/api/collections', {
++      method: 'POST', headers,
++      body: JSON.stringify({
++        title, shoot_type: shootType, session_kind: 'photo_zone',
++        related_event_id: shootType === 'session' ? eventId : null, session_model: { name: title },
++      }),
++    })
++    expect((await create('Invalid', 'event')).status).toBe(400)
++    const id = (await (await create('Zone')).json()).id
++    const emptyId = (await (await create('Empty')).json()).id
++    const draftId = (await (await create('Draft')).json()).id
++    const details = async (collectionId) =>
++      (await SELF.fetch(`https://example.com/api/collections/${collectionId}`)).json()
++    const patch = (collectionId, json) => SELF.fetch(`https://example.com/api/collections/${collectionId}`, {
++      method: 'PATCH', headers, body: JSON.stringify(json),
++    })
++    for (const collectionId of [id, draftId, personalId]) {
++      await env.DB.prepare('INSERT INTO photos (collection_id, key_thumb, key_large) VALUES (?, ?, ?)')
++        .bind(collectionId, 'thumb-' + collectionId, 'large-' + collectionId).run()
++    }
++    expect((await patch(id, { published: true, session_kind: 'photo_zone', session_model: { name: 'Renamed' } })).status).toBe(200)
++    expect((await patch(emptyId, { published: true })).status).toBe(200)
++    expect((await details(id)).session_model.name).toBe('Renamed')
++    expect((await details(personalId)).session_kind).toBe('personal')
++    expect((await details(eventId)).related_photo_zones).toEqual([{ id, title: 'Zone' }])
++    const list = await (await SELF.fetch('https://example.com/api/collections')).json()
++    expect(list.find((collection) => collection.id === id).session_kind).toBe('photo_zone')
++    expect((await patch(id, { session_kind: 'personal' })).status).toBe(200)
++    expect((await details(id)).session_kind).toBe('personal')
++    expect((await details(eventId)).related_photo_zones).toEqual([])
++  })
++})
+diff --git a/test/session-rail.node.mjs b/test/session-rail.node.mjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..a54207639d133d3dbd880ebe71e84450482b8329
+--- /dev/null
++++ b/test/session-rail.node.mjs
+@@ -0,0 +1,16 @@
++import assert from 'node:assert/strict'
++import { readFileSync } from 'node:fs'
++import { runInNewContext } from 'node:vm'
++import { test } from 'node:test'
++
++const railSource = readFileSync(new URL('../public/session-rail.js', import.meta.url), 'utf8')
++const { sessionRailIndex, sessionRailModulo } = runInNewContext(`${railSource}\n({ sessionRailIndex, sessionRailModulo })`)
++
++test('the session rail wraps in both directions and keeps fractional positions', () => {
++  assert.equal(sessionRailIndex(150, 300), 0)
++  assert.equal(sessionRailIndex(151, 300), 1)
++  assert.equal(sessionRailModulo(sessionRailIndex(1200, 300), 4), 0)
++  assert.equal(sessionRailModulo(sessionRailIndex(-300, 300), 4), 3)
++  assert.equal(sessionRailModulo(1200.25, 1200), 0.25)
++  assert.equal(sessionRailModulo(-0.5, 1200), 1199.5)
++})

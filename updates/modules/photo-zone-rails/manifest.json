@@ -1,0 +1,63 @@
+{
+  "id": "photo-zone-rails",
+  "version": "1.0.0",
+  "title": "Photo Zone과 가로 세션 카드",
+  "baseCommit": "c1e54c341b420e2307ae381faa7be895b4c7a265",
+  "requires": [
+    "personal-session-cards"
+  ],
+  "databaseMigrations": [],
+  "files": [
+    {
+      "path": "public/admin.js",
+      "beforeSha256": "55779c15ca48abde31ddabb166f8135e7345cd9a678f60e3b7a660341e2b6693",
+      "afterSha256": "e31b9ba06da9f0287095a3dfe46b6dd8374addcbbf9532f8248a6fe3ee22738a"
+    },
+    {
+      "path": "public/app.js",
+      "beforeSha256": "fe2ef3194e3fb754c738b14526749e4c09dd11ef5533c14424d6caaf9bc1c99c",
+      "afterSha256": "b6ee244aa4d70e8a15dd15731eab6804538a8c7271ab16ec3fafb7e1c40cb85b"
+    },
+    {
+      "path": "public/index.html",
+      "beforeSha256": "453b5976a75999a818b7eae3e2e3368f4fcb07392050ac93e6936979f4a0714a",
+      "afterSha256": "09b9948e0134337540ac272d48ddc68fb4bd2720c5e17230c7e01d1bbfa80f97"
+    },
+    {
+      "path": "public/session-rail.js",
+      "beforeSha256": null,
+      "afterSha256": "ceb6689fc3c27acad73a60aab964ea3761e770e257a657b4a25ef6a262581b7f"
+    },
+    {
+      "path": "public/style.css",
+      "beforeSha256": "a3e07f9c054e971010547229c3d5d3d6f88ca13f8fd3a5c10b9908a413ed1fad",
+      "afterSha256": "e68e2084176880c362a1253248353832cc63f2ea1591f67d07de94538f4fcddd"
+    },
+    {
+      "path": "src/worker.js",
+      "beforeSha256": "aed83c115230361c51f54b277c43b3de64c3fc7e4c5e74249a7fb5368a4ee416",
+      "afterSha256": "c351305bbfa5e8ea62d1aa72345c27b27a017daa017ff975c730c0b02bd4e5e0"
+    },
+    {
+      "path": "test/photo-zone-rails.worker.test.js",
+      "beforeSha256": null,
+      "afterSha256": "03d02fb85ccb5caef8b8eaed7e96c5402186755c45f1a213cd36e1b7d9ab286b"
+    },
+    {
+      "path": "test/session-rail.node.mjs",
+      "beforeSha256": null,
+      "afterSha256": "dfa39fd6649e9efbf6344e4468e4a9c97e9d4fb20a57129dbab6bd9a4afa0635"
+    }
+  ],
+  "tests": [
+    "npm test",
+    "node --test test/session-card.node.mjs test/session-rail.node.mjs"
+  ],
+  "patchSha256": "2df82b5b9981412484622a2c9d164a3fb2e80e7eb72ec9376f4285e8bca44fa7",
+  "requiredMarkers": [
+    {
+      "path": "public/session-card.js",
+      "text": "function sessionCardHtml("
+    }
+  ]
+}
