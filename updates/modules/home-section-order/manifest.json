@@ -1,0 +1,52 @@
+{
+  "id": "home-section-order",
+  "version": "1.0.0",
+  "title": "홈 섹션 순서 드래그",
+  "baseCommit": "c1e54c341b420e2307ae381faa7be895b4c7a265",
+  "requires": [
+    "photo-zone-rails"
+  ],
+  "databaseMigrations": [],
+  "files": [
+    {
+      "path": "public/admin.html",
+      "beforeSha256": "9e759236d662594589108b738349c9e1c25225beaf8b88b1e79207841d8e7f41",
+      "afterSha256": "0d2b2a2ab44120af7486ccba13c01b9b6e8bee9ab5c99c8ca0e4ee3920a5e3df"
+    },
+    {
+      "path": "public/admin.js",
+      "beforeSha256": "e31b9ba06da9f0287095a3dfe46b6dd8374addcbbf9532f8248a6fe3ee22738a",
+      "afterSha256": "1ec2f446fb09751f87438e5fb9570968282572125450965e477226f00709faf6"
+    },
+    {
+      "path": "public/app.js",
+      "beforeSha256": "b6ee244aa4d70e8a15dd15731eab6804538a8c7271ab16ec3fafb7e1c40cb85b",
+      "afterSha256": "6af95a5590ddc537a27c3bf0c66a4e3c60661b4a47c538a0be4b9222b0cb91b0"
+    },
+    {
+      "path": "public/session-card.js",
+      "beforeSha256": "f8ae4d3653cc2046e52ba29f5635a83c7b6822b6c7d61b90e92b0d7fca1c6adf",
+      "afterSha256": "1c7519ef288bec71e779336f49e9308c3070ad633251d98868a70b0221a029ff"
+    },
+    {
+      "path": "src/worker.js",
+      "beforeSha256": "c351305bbfa5e8ea62d1aa72345c27b27a017daa017ff975c730c0b02bd4e5e0",
+      "afterSha256": "9828b0feb51b8e3e3f1851d792213e796e0a4df21e6f2f587d096575624d61e8"
+    },
+    {
+      "path": "test/home-section-order.worker.test.js",
+      "beforeSha256": null,
+      "afterSha256": "853ee153db320c94a021bc2f62140e0365c6ede0908bafac7b6b6fc8870542a7"
+    }
+  ],
+  "tests": [
+    "npm test"
+  ],
+  "patchSha256": "abf91842bfe3fff5d6c55370554606987eaaf7dbaee7a7f007bb12be678b4b16",
+  "requiredMarkers": [
+    {
+      "path": "public/session-rail.js",
+      "text": "function mountSessionRails("
+    }
+  ]
+}

@@ -1,0 +1,309 @@
+diff --git a/public/admin.html b/public/admin.html
+index 5fff7e4281c29f3965c6f9795f39e7ec523747ab..92a43b46eb2d3d6ac1b4072f1331e69fd7d8ad02 100644
+--- a/public/admin.html
++++ b/public/admin.html
+@@ -27,8 +27,18 @@
+     .col-item .ord-btns { display: flex; gap: 4px; }
+     .col-item .ord-btns button { font-size: 11px; padding: 3px 8px; }
+-    .home-order-panel .sec-head { align-items: center; }
+-    .home-order-control { display: flex; align-items: center; gap: 8px; }
+-    .home-order-control select { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 8px 10px; min-width: 230px; }
+-    .home-order-control button { white-space: nowrap; }
++    .home-order-panel .sec-head { align-items: flex-start; gap: 16px; }
++    .home-order-control { width: min(100%, 282px); }
++    .home-order-list { display: grid; gap: 6px; list-style: none; }
++    .home-order-row {
++      display: flex; align-items: center; justify-content: space-between; width: 100%;
++      padding: 9px 12px; min-height: 44px; text-align: left; cursor: grab;
++      touch-action: none; user-select: none;
++    }
++    .home-order-list .is-dragging .home-order-row {
++      cursor: grabbing; border-color: var(--fg-dim); background: var(--border);
++    }
++    .home-order-grip { font-size: 18px; line-height: 1; color: var(--fg-dim); }
++    .home-order-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; }
++    .home-order-actions button { flex: none; white-space: nowrap; }
+     .home-order-status { color: var(--fg-faint); font-size: 11px; min-width: 64px; }
+     .session-model-fields { margin: 12px 0 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+@@ -178,5 +188,4 @@
+       .home-order-panel .sec-head { align-items: flex-start; flex-direction: column; gap: 12px; }
+       .home-order-control { width: 100%; }
+-      .home-order-control select { flex: 1; min-width: 0; }
+       .alias-add { width: 100%; } .alias-add input { width: 100%; }
+       .admin-ph .acts { gap: 4px; padding: 6px; }
+diff --git a/public/admin.js b/public/admin.js
+index 6bea9311ad0228add991f5131b32cd6625f794e1..46fece6e39b6dbfbf0dbe3a847f3a98270e13f1d 100644
+--- a/public/admin.js
++++ b/public/admin.js
+@@ -254,4 +254,81 @@ async function boot() {
+ }
+ 
++function setupHomeSectionOrder() {
++  const list = document.getElementById('homeSectionOrder')
++  const save = document.getElementById('homeSectionOrderSave')
++  const status = document.getElementById('homeOrderStatus')
++  const serialize = () => Array.from(list.children, (row) => row.dataset.kind).join(',')
++  let savedOrder = serialize()
++  let drag = null
++  let saving = false
++  function syncSave() {
++    save.disabled = saving || Boolean(drag) || serialize() === savedOrder
++  }
++
++  list.addEventListener('pointerdown', (event) => {
++    const row = event.target.closest('.home-order-row')?.parentElement
++    if (!row || saving || drag || event.button !== 0 || !event.isPrimary) return
++    drag = { row, id: event.pointerId, before: row.nextElementSibling }
++    row.classList.add('is-dragging')
++    list.setPointerCapture(event.pointerId)
++    syncSave()
++  })
++  list.addEventListener('pointermove', (event) => {
++    if (drag?.id !== event.pointerId) return
++    const next = Array.from(list.children).find((row) => {
++      if (row === drag.row) return false
++      const rect = row.getBoundingClientRect()
++      return event.clientY < rect.top + rect.height / 2
++    }) || null
++    if (next !== drag.row.nextElementSibling) {
++      list.insertBefore(drag.row, next)
++      status.textContent = ''
++    }
++  })
++  function finishDrag(event) {
++    if (drag?.id !== event.pointerId) return
++    if (event.type === 'pointercancel') list.insertBefore(drag.row, drag.before)
++    drag.row.classList.remove('is-dragging')
++    drag = null
++    syncSave()
++  }
++  list.addEventListener('pointerup', finishDrag)
++  list.addEventListener('pointercancel', finishDrag)
++  list.addEventListener('lostpointercapture', (event) => {
++    if (event.target === list) finishDrag(event)
++  })
++  list.addEventListener('keydown', (event) => {
++    const button = event.target.closest('.home-order-row')
++    if (!button || saving || drag || !['ArrowUp', 'ArrowDown'].includes(event.key)) return
++    const row = button.parentElement
++    const up = event.key === 'ArrowUp'
++    const neighbor = up ? row.previousElementSibling : row.nextElementSibling
++    event.preventDefault()
++    if (!neighbor) return
++    list.insertBefore(row, up ? neighbor : neighbor.nextElementSibling)
++    button.focus({ preventScroll: true })
++    const position = Array.from(list.children).indexOf(row) + 1
++    status.textContent = `${HOME_SECTION_LABELS[row.dataset.kind]} · ${position}번째`
++    syncSave()
++  })
++  save.addEventListener('click', async () => {
++    if (saving || drag) return
++    const order = serialize()
++    saving = true
++    syncSave()
++    status.textContent = '저장 중…'
++    try {
++      await api('/settings', { method: 'PATCH', json: { home_section_order: order } })
++      savedOrder = order
++      status.textContent = '저장됨'
++    } catch (error) {
++      status.textContent = '저장 실패: ' + error.message
++    } finally {
++      saving = false
++      syncSave()
++    }
++  })
++}
++
+ // ---------- collections list ----------
+ async function renderCollections() {
+@@ -265,7 +342,5 @@ async function renderCollections() {
+   const sessionCols = cols.filter((c) => collectionListKind(c) === 'session')
+   const zoneCols = cols.filter((c) => collectionListKind(c) === 'photo_zone')
+-  const selectedHomeOrder = homeSettings.home_section_order === 'sessions_first'
+-    ? 'sessions_first'
+-    : 'events_first'
++  const selectedHomeOrder = homeSectionOrder(homeSettings.home_section_order)
+   const relatedEventOptions = eventCols.map((c) =>
+     `<option value="${c.id}">${esc(c.title)}${c.date ? ` · ${esc(c.date)}` : ''}</option>`).join('')
+@@ -387,13 +462,19 @@ async function renderCollections() {
+         <div>
+           <h3>홈 섹션 순서</h3>
+-          <div class="muted">방문자 홈에서 Events와 Personal Sessions가 표시되는 순서</div>
++          <div class="muted">위아래로 끌어 홈에 표시할 순서를 바꾸세요.</div>
+         </div>
+         <div class="home-order-control">
+-          <select id="homeSectionOrder" aria-label="홈 섹션 순서">
+-            <option value="events_first" ${selectedHomeOrder === 'events_first' ? 'selected' : ''}>Events 먼저</option>
+-            <option value="sessions_first" ${selectedHomeOrder === 'sessions_first' ? 'selected' : ''}>Personal Sessions 먼저</option>
+-          </select>
+-          <button class="primary" id="homeSectionOrderSave">저장</button>
+-          <span class="home-order-status" id="homeOrderStatus" role="status"></span>
++          <ol id="homeSectionOrder" class="home-order-list" aria-label="홈 섹션 순서">
++            ${selectedHomeOrder.map((kind) => `<li data-kind="${kind}">
++              <button type="button" class="home-order-row" aria-label="${HOME_SECTION_LABELS[kind]} 순서 이동" aria-describedby="homeOrderKeys">
++                <span>${HOME_SECTION_LABELS[kind]}</span><span class="home-order-grip" aria-hidden="true">⠿</span>
++              </button>
++            </li>`).join('')}
++          </ol>
++          <span id="homeOrderKeys" hidden>위·아래 방향키로 한 칸씩 옮깁니다.</span>
++          <div class="home-order-actions">
++            <span class="home-order-status" id="homeOrderStatus" role="status"></span>
++            <button type="button" class="primary" id="homeSectionOrderSave" disabled>저장</button>
++          </div>
+         </div>
+       </div>
+@@ -404,20 +485,5 @@ async function renderCollections() {
+ 
+   setupAdminMenu()
+-  const homeOrderSelect = document.getElementById('homeSectionOrder')
+-  const homeOrderSave = document.getElementById('homeSectionOrderSave')
+-  const homeOrderStatus = document.getElementById('homeOrderStatus')
+-  homeOrderSave.addEventListener('click', async () => {
+-    homeOrderSave.disabled = true
+-    homeOrderStatus.textContent = '저장 중…'
+-    try {
+-      await api('/settings', { method: 'PATCH', json: { home_section_order: homeOrderSelect.value } })
+-      homeOrderStatus.textContent = '저장됨'
+-    } catch (error) {
+-      homeOrderStatus.textContent = ''
+-      alert('홈 섹션 순서 저장 실패: ' + error.message)
+-    } finally {
+-      homeOrderSave.disabled = false
+-    }
+-  })
++  setupHomeSectionOrder()
+   document.getElementById('backupBtn').addEventListener('click', async () => {
+     try { await downloadBackup() } catch (e) { alert('백업 다운로드 실패: ' + e.message) }
+diff --git a/public/app.js b/public/app.js
+index 59d311bd35b81a5b5a8fa6974907cd41c7b15e94..af9353a22971faf98db3beed9887cd2ae176ff85 100644
+--- a/public/app.js
++++ b/public/app.js
+@@ -762,8 +762,5 @@ async function renderHome() {
+   }
+ 
+-  const sectionOrder = settings.home_section_order === 'sessions_first'
+-    ? ['session', 'photo_zone', 'event']
+-    : ['event', 'session', 'photo_zone']
+-  const sectionTitles = { event: 'Events', session: 'Personal Sessions', photo_zone: 'Photo Zone' }
++  const sectionOrder = homeSectionOrder(settings.home_section_order)
+   const collectionSections = sectionOrder.map((kind) => {
+     const items = collectionsByType[kind]
+@@ -774,5 +771,5 @@ async function renderHome() {
+         <div class="collection-block-head">
+           <div class="collection-block-title">
+-            <h3 id="${listId}-title">${sectionTitles[kind]}</h3>
++            <h3 id="${listId}-title">${HOME_SECTION_LABELS[kind]}</h3>
+             <div class="date">${items.length} collections</div>
+           </div>
+diff --git a/public/session-card.js b/public/session-card.js
+index 768b02cfbcc7a11f9d5b2b16b1049e6534679372..dedb5061af802ecdad4d7113968462bb41d62950 100644
+--- a/public/session-card.js
++++ b/public/session-card.js
+@@ -1,2 +1,12 @@
++const HOME_SECTION_LABELS = { event: 'Events', session: 'Personal Sessions', photo_zone: 'Photo Zone' }
++const HOME_SECTION_KEYS = Object.keys(HOME_SECTION_LABELS)
++
++function homeSectionOrder(value) {
++  if (value === 'sessions_first') return ['session', 'photo_zone', 'event']
++  const order = typeof value === 'string' ? value.split(',') : []
++  if (order.length === HOME_SECTION_KEYS.length && HOME_SECTION_KEYS.every((key) => order.includes(key))) return order
++  return HOME_SECTION_KEYS
++}
++
+ function sessionList(value, separator = /[,\s]+/) {
+   const values = Array.isArray(value) ? value : String(value || '').split(separator)
+diff --git a/src/worker.js b/src/worker.js
+index 97e7885dbdda8ea04de86993dcbe451983d7d750..6f921d712805f5b62835e22ea0f41b59b94a9779 100644
+--- a/src/worker.js
++++ b/src/worker.js
+@@ -10,5 +10,9 @@ const MAX_LOGIN_FAILURES = 5
+ const SHOOT_TYPES = new Set(['event', 'session'])
+ const LOCATION_TYPES = new Set(['', 'venue', 'outdoor', 'studio'])
+-const HOME_SECTION_ORDERS = new Set(['events_first', 'sessions_first'])
++function validHomeSectionOrder(value) {
++  if (value === 'events_first' || value === 'sessions_first') return true
++  const order = typeof value === 'string' ? value.split(',') : []
++  return order.length === 3 && ['event', 'session', 'photo_zone'].every((kind) => order.includes(kind))
++}
+ 
+ function nullablePositiveInteger(value) {
+@@ -1168,11 +1172,11 @@ app.get('/api/settings', async (c) => {
+     featured_collection_id: map.featured_collection_id ? +map.featured_collection_id : null,
+     about,
+-    home_section_order: HOME_SECTION_ORDERS.has(map.home_section_order) ? map.home_section_order : 'events_first',
+-  }, 200, apiCacheHeaders(false))
++    home_section_order: validHomeSectionOrder(map.home_section_order) ? map.home_section_order : 'events_first',
++  }, 200, apiCacheHeaders(await isAdmin(c)))
+ })
+ 
+ app.patch('/api/settings', requireAdmin, async (c) => {
+   const body = await c.req.json()
+-  if ('home_section_order' in body && !HOME_SECTION_ORDERS.has(body.home_section_order)) {
++  if ('home_section_order' in body && !validHomeSectionOrder(body.home_section_order)) {
+     return c.json({ error: 'invalid home_section_order' }, 400)
+   }
+diff --git a/test/home-section-order.worker.test.js b/test/home-section-order.worker.test.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..4450e75d531d8f32840d951a7667b7672943c4b2
+--- /dev/null
++++ b/test/home-section-order.worker.test.js
+@@ -0,0 +1,58 @@
++import { describe, expect, it } from 'vitest'
++import { env, SELF } from 'cloudflare:test'
++
++async function login(password = 'test-password') {
++  const response = await SELF.fetch('https://example.com/api/login', {
++    method: 'POST',
++    headers: { 'Content-Type': 'application/json' },
++    body: JSON.stringify({ password }),
++  })
++  return { response, cookie: response.headers.get('set-cookie')?.split(';')[0] }
++}
++
++async function seedCollection({ title, published = 1, deletedAt = null, shootType = 'event', locationType = '', relatedEventId = null } = {}) {
++  const result = await env.DB.prepare(
++    `INSERT INTO collections
++       (title, description, published, deleted_at, shoot_type, location_type, related_event_id)
++     VALUES (?, ?, ?, ?, ?, ?, ?)`
++  ).bind(title || 'Collection', 'Description', published, deletedAt, shootType, locationType, relatedEventId).run()
++  return result.meta.last_row_id
++}
++
++describe('home-section-order', () => {
++  it('stores and validates the home section order', async () => {
++    expect(await (await SELF.fetch('https://example.com/api/settings')).json()).toMatchObject({
++      home_section_order: 'events_first',
++    })
++    expect((await SELF.fetch('https://example.com/api/settings', {
++      method: 'PATCH',
++      headers: { 'Content-Type': 'application/json' },
++      body: JSON.stringify({ home_section_order: 'sessions_first' }),
++    })).status).toBe(401)
++    const { cookie } = await login()
++    expect((await SELF.fetch('https://example.com/api/settings', {
++      method: 'PATCH',
++      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
++      body: JSON.stringify({ home_section_order: 'invalid' }),
++    })).status).toBe(400)
++    expect((await SELF.fetch('https://example.com/api/settings', {
++      method: 'PATCH',
++      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
++      body: JSON.stringify({ home_section_order: 'sessions_first' }),
++    })).status).toBe(200)
++    expect(await (await SELF.fetch('https://example.com/api/settings')).json()).toMatchObject({
++      home_section_order: 'sessions_first',
++    })
++    const saveOrder = (home_section_order) => SELF.fetch('https://example.com/api/settings', {
++      method: 'PATCH',
++      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
++      body: JSON.stringify({ home_section_order }),
++    })
++    const order = 'photo_zone,event,session'
++    expect((await saveOrder(order)).status).toBe(200)
++    expect((await saveOrder('photo_zone,event,event')).status).toBe(400)
++    const saved = await SELF.fetch('https://example.com/api/settings', { headers: { Cookie: cookie } })
++    expect(saved.headers.get('Cache-Control')).toBe('private, no-store')
++    expect(await saved.json()).toMatchObject({ home_section_order: order })
++  })
++})
