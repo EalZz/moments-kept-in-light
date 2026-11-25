@@ -29,6 +29,7 @@
 | 기능 | 할 수 있는 일 | 제공 형태 | 적용 안내 |
 |---|---|---|---|
 | [개인 세션 카드와 대표 사진 구도](docs/features/personal-session-cards.md) | 가로형 개인 세션 카드와 PC·모바일 구도 미리보기 | 선택 업데이트 | [설명서](updates/modules/personal-session-cards/README.md) · [Codex 요청문](updates/modules/personal-session-cards/CODEX.md) |
+| [세션 카드 기본 테두리 숨기기](docs/features/personal-session-cards.md#기본-테두리-숨기기) | 포인터를 올리거나 키보드로 포커스할 때만 회색 선 표시 | 선택 업데이트 | [설명서](updates/modules/session-card-border/README.md) · [ZIP](https://github.com/EalZz/moments-kept-in-light/releases/download/feature-updates-2026-11-25-2/session-card-border-1.0.0.zip) |
 | [Photo Zone과 가로 세션 카드](docs/features/photo-zone-rails.md) | 행사 예약 촬영의 별도 갤러리와 가로 루프 | 선택 업데이트 | [설명서](updates/modules/photo-zone-rails/README.md) · [Codex 요청문](updates/modules/photo-zone-rails/CODEX.md) |
 | [홈 섹션 순서 드래그](docs/features/home-section-order.md) | 세 섹션을 직접 끌어 홈 순서 지정 | 선택 업데이트 | [설명서](updates/modules/home-section-order/README.md) · [Codex 요청문](updates/modules/home-section-order/CODEX.md) |
 | [갤러리 배치 개선](docs/features/gallery-layout.md) | 모바일 홀수·혼합 사진 배치, 데스크톱 중앙 정렬 | 선택 업데이트 | [설명서](updates/modules/gallery-layout/README.md) · [Codex 요청문](updates/modules/gallery-layout/CODEX.md) |

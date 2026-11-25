@@ -18,3 +18,7 @@
 세로 인물 사진에서 얼굴과 의상이 함께 보이는 4:5 영역을 골라 두 비율의 카드에 같은 구도를 적용할 수 있습니다.
 
 [ZIP 내려받기](https://github.com/EalZz/moments-kept-in-light/releases/download/feature-updates-2026-11-25/personal-session-cards-1.0.0.zip) · [적용·복구 설명서](../../updates/modules/personal-session-cards/README.md) · [Codex 요청문](../../updates/modules/personal-session-cards/CODEX.md)
+
+## 기본 테두리 숨기기
+
+카드의 기본 테두리를 숨기려면 이 기능 위에 선택 패치를 적용하세요. 마우스를 올리거나 키보드로 포커스하면 회색 선이 나타납니다. [ZIP 내려받기](https://github.com/EalZz/moments-kept-in-light/releases/download/feature-updates-2026-11-25-2/session-card-border-1.0.0.zip) · [적용·복구 설명서](../../updates/modules/session-card-border/README.md)

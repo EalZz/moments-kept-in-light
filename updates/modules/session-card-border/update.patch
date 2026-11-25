@@ -1,0 +1,13 @@
+diff --git a/public/style.css b/public/style.css
+index 7dab593740960c6c3bd8ab7734a3db76a566b943..e709b3a5c29c3f1feb307273e475205e36dcce77 100644
+--- a/public/style.css
++++ b/public/style.css
+@@ -1351,7 +1351,7 @@ main.wrap { padding-top: 76px; }
+   position: absolute;
+   z-index: 3;
+   inset: 0;
+-  border: 1px solid rgba(255, 255, 255, .26);
++  border: 1px solid transparent;
+   border-radius: inherit;
+   pointer-events: none;
+ }

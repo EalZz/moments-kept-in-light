@@ -10,7 +10,7 @@ const root = fileURLToPath(new URL('../../', import.meta.url))
 const base = 'c1e54c341b420e2307ae381faa7be895b4c7a265'
 const ids = [
   'model-display-names', 'tweet-import-select', 'gallery-layout', 'featured-photo-transition',
-  'personal-session-cards', 'photo-zone-rails', 'home-section-order',
+  'personal-session-cards', 'photo-zone-rails', 'home-section-order', 'session-card-border',
 ]
 const patch = (id) => join(root, 'updates/modules', id, 'update.patch')
 const inspect = (id, project) => spawnSync(process.execPath, [join(root, 'scripts/check-feature-update.mjs'), id, project], { encoding: 'utf8' })

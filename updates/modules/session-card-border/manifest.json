@@ -1,0 +1,27 @@
+{
+  "id": "session-card-border",
+  "version": "1.0.0",
+  "title": "세션 카드 기본 테두리 숨기기",
+  "baseCommit": "c1e54c341b420e2307ae381faa7be895b4c7a265",
+  "requires": [
+    "personal-session-cards"
+  ],
+  "databaseMigrations": [],
+  "files": [
+    {
+      "path": "public/style.css",
+      "beforeSha256": "a3e07f9c054e971010547229c3d5d3d6f88ca13f8fd3a5c10b9908a413ed1fad",
+      "afterSha256": "c56bc9afd815263810daf0afaed9f9b81d251e82f55c6660f12d685bfb7be5cd"
+    }
+  ],
+  "tests": [
+    "node --test test/session-card.node.mjs"
+  ],
+  "patchSha256": "169a2f02b4879c82fde179a2f46d61c9abd343d9a6e578fab3253f3b440993c7",
+  "requiredMarkers": [
+    {
+      "path": "public/session-card.js",
+      "text": "function sessionCardHtml("
+    }
+  ]
+}

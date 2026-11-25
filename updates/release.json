@@ -1,9 +1,7 @@
 {
-  "tag": "feature-updates-2026-11-25",
-  "title": "필요한 기능만 선택 업데이트 · 2026-11-25",
+  "tag": "feature-updates-2026-11-25-2",
+  "title": "세션 카드 기본 테두리 숨기기 · 2026-11-25",
   "modules": [
-    "personal-session-cards",
-    "photo-zone-rails",
-    "home-section-order"
+    "session-card-border"
   ]
 }
